@@ -16,7 +16,7 @@ Home Assistant baut die App bei der ersten Installation aus dem mitgelieferten D
 Für eine lokale Installation den Ordner `matrix_meshtastic` in das Add-on-Verzeichnis `/addons` von Home Assistant kopieren. Danach den Add-on-Store aktualisieren und „Matrix Meshtastic Bridge“ unter den lokalen Add-ons installieren.
 
 1. Ein eigenes Matrix-Bot-Konto auf deinem Homeserver anlegen und in den gewünschten Raum einladen.
-2. Unter `matrix` die Homeserver-Adresse, die vollständige `user_id` und die `room_id` eintragen. Alternativ zur Raum-ID ist ein Raum-Alias möglich.
+2. Unter `matrix` die Homeserver-Adresse, die vollständige `user_id` und die interne `room_id` mit `!` eintragen. Bei Raumversion 12 hat diese ID keine Server-Endung; ältere IDs sehen wie `!raum:example.org` aus. Alternativ zur Raum-ID ist ein Raum-Alias wie `#raum:example.org` möglich.
 3. Für die Anmeldung entweder `password` oder `access_token` zusammen mit dessen `device_id` eintragen.
 4. Unter `meshtastic.connection` eine Verbindungsart auswählen und deren Felder ausfüllen.
 5. `channel_index` auf den lokalen privaten Channel des Knotens setzen und dessen AES-Schlüssel als Base64 in `channel_psk` eintragen.

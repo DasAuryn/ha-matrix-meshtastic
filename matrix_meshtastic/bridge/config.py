@@ -74,7 +74,11 @@ class Settings:
             raise ValueError("Matrix benötigt eine Server-URL ohne Zugangsdaten.")
         if not matrix.user_id.startswith("@") or ":" not in matrix.user_id:
             raise ValueError("Die vollständige Matrix-Benutzer-ID wird benötigt.")
-        if not matrix.room_id.startswith(("!", "#")) or ":" not in matrix.room_id:
+        room_id = matrix.room_id
+        is_room = room_id.startswith("!") and len(room_id) > 1
+        alias_local, separator, alias_server = room_id.partition(":")
+        is_alias = alias_local.startswith("#") and len(alias_local) > 1 and separator and alias_server
+        if not (is_room or is_alias) or "\x00" in room_id:
             raise ValueError("Eine Matrix-Raum-ID oder ein Raumalias wird benötigt.")
         if not matrix.password and not matrix.access_token:
             raise ValueError("Ein Matrix-Passwort oder Access-Token wird benötigt.")

@@ -20,7 +20,7 @@ configuration:
         description: Geräte-ID zur Token-Anmeldung. Bei Passwort-Anmeldung kann dieses Feld leer bleiben.
       room_id:
         name: Raum
-        description: Matrix-Raum-ID (!raum:example.org) oder Raum-Alias (#raum:example.org).
+        description: Interne Matrix-Raum-ID mit !, bei neuen Räumen ohne Server-Endung. Alternativ ein Raum-Alias (#raum:example.org).
   meshtastic:
     name: Meshtastic
     description: Eine Verbindungsart auswählen und die zugehörigen Felder ausfüllen.

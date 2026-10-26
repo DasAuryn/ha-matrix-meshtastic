@@ -1,5 +1,5 @@
 name: Matrix Meshtastic Bridge
-version: "0.1.0"
+version: "0.1.1"
 slug: matrix_meshtastic
 description: Nachrichten zwischen einem Matrix-Raum und einem privaten Meshtastic-Channel austauschen.
 arch:

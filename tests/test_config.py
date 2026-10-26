@@ -83,6 +83,24 @@ def test_accepts_room_alias_and_private_256_bit_key(tmp_path, valid_options):
     assert load_options(tmp_path, valid_options).matrix.room_id.startswith("#")
 
 
+@pytest.mark.parametrize("room_id", [
+    "!testroom:example.invalid",
+    "!Nhcu5BS-UMnFX7hBVfVSoXiD7OgH6iRT-xyIuqDnpYQ",
+    "!Opaque_Future-Format",
+    "#testroom:example.invalid",
+])
+def test_accepts_opaque_room_ids_and_preserves_them(tmp_path, valid_options, room_id):
+    valid_options["matrix"]["room_id"] = room_id
+    assert load_options(tmp_path, valid_options).matrix.room_id == room_id
+
+
+@pytest.mark.parametrize("room_id", ["!", "#", "#room", "#:example.invalid", "#room:", "!room\x00"])
+def test_rejects_empty_room_ids_and_incomplete_aliases(tmp_path, valid_options, room_id):
+    valid_options["matrix"]["room_id"] = room_id
+    with pytest.raises(ValueError):
+        load_options(tmp_path, valid_options)
+
+
 def test_authentication_and_keys_are_hidden_from_settings_repr(tmp_path, valid_options):
     settings = load_options(tmp_path, valid_options)
     result = repr(settings)

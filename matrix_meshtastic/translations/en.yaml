@@ -20,7 +20,7 @@ configuration:
         description: Device ID for token authentication. Leave empty when using password authentication.
       room_id:
         name: Room
-        description: Matrix room ID (!room:example.org) or alias (#room:example.org).
+        description: Internal Matrix room ID starting with !, without a server suffix for newer rooms. Alternatively, a room alias (#room:example.org).
   meshtastic:
     name: Meshtastic
     description: Select one connection type and fill in its corresponding fields.

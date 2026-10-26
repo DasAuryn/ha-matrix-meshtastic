@@ -9,7 +9,7 @@ RUN pip wheel --no-cache-dir --wheel-dir /wheels -r /tmp/requirements.txt
 
 FROM python:3.13-slim-bookworm
 
-ARG BUILD_VERSION=0.1.0
+ARG BUILD_VERSION=0.1.1
 ARG BUILD_ARCH
 
 LABEL io.hass.name="Matrix Meshtastic Bridge" \
