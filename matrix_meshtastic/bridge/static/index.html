@@ -1,0 +1,88 @@
+<!doctype html>
+<html lang="de">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="color-scheme" content="light dark">
+  <title>Matrix Messenger</title>
+  <link rel="stylesheet" href="static/app.css">
+  <script src="static/app.js" defer></script>
+</head>
+<body>
+  <div class="messenger" id="messenger">
+    <aside class="sidebar" aria-label="Chats">
+      <header class="brand-header">
+        <div class="brand-mark" aria-hidden="true">M</div>
+        <div class="brand-copy"><h1>Matrix</h1><p>Dein Messenger in Home Assistant</p></div>
+        <button class="icon-button" id="new-chat" aria-label="Neue Direktnachricht" title="Neue Direktnachricht">＋</button>
+      </header>
+      <div class="connection-summary">
+        <div class="connection-line"><span class="status-dot" id="matrix-dot"></span><strong id="matrix-status">Verbinde mit Matrix …</strong></div>
+        <p id="account-name">Konto wird geladen</p>
+        <button class="account-security" id="account-security">◇ Geräte &amp; Schlüssel</button>
+      </div>
+      <div class="search-wrap"><span aria-hidden="true">⌕</span><input id="search" type="search" placeholder="Chats durchsuchen" autocomplete="off" aria-label="Chats durchsuchen"></div>
+      <nav class="chat-tabs" aria-label="Chatfilter">
+        <button class="tab active" data-filter="all" aria-pressed="true">Alle</button>
+        <button class="tab" data-filter="direct" aria-pressed="false">Direkt</button>
+        <button class="tab" data-filter="rooms" aria-pressed="false">Räume</button>
+      </nav>
+      <p class="list-caption" id="list-caption">DEINE CHATS</p>
+      <div class="room-list" id="room-list" role="group" aria-label="Chatliste"><p class="sidebar-empty">Deine Chats werden geladen …</p></div>
+      <footer class="sidebar-footer"><span class="mesh-symbol" aria-hidden="true">⌁</span><div><strong id="mesh-status">Meshtastic</strong><p id="mesh-detail">Status wird geladen</p></div></footer>
+    </aside>
+    <main class="conversation">
+      <section class="welcome" id="welcome">
+        <div class="welcome-mark" aria-hidden="true">[ m ]</div>
+        <span class="eyebrow">MATRIX MESSENGER</span>
+        <h2>Ein Platz für deine Gespräche.</h2>
+        <p>Öffne einen Chat oder starte eine Direktnachricht. Matrix funktioniert auch ohne verbundenes Meshtastic-Gerät.</p>
+        <button class="primary-button" id="welcome-new-chat">Neue Direktnachricht</button>
+        <p class="welcome-error" id="welcome-error" role="status"></p>
+      </section>
+      <section class="chat-view hidden" id="chat-view" aria-label="Unterhaltung">
+        <header class="conversation-header">
+          <button class="icon-button back-button" id="back-to-chats" aria-label="Zurück zur Chatliste">‹</button>
+          <div class="room-avatar" id="header-avatar" aria-hidden="true">#</div>
+          <div class="conversation-title"><h2 id="chat-title"></h2><p id="chat-subtitle"></p></div>
+          <span class="encryption-label" id="encryption-label"></span>
+        </header>
+        <div class="chat-notice hidden" id="chat-notice" role="status"></div>
+        <div class="timeline" id="timeline" tabindex="0" aria-label="Nachrichtenverlauf">
+          <div class="history-control"><button class="quiet-button hidden" id="load-history">Ältere Nachrichten laden</button></div>
+          <div class="messages" id="messages" role="log" aria-live="polite" aria-relevant="additions text"></div>
+          <p class="timeline-empty hidden" id="timeline-empty">Hier beginnt euer Gespräch.</p>
+        </div>
+        <div class="invitation hidden" id="invitation"><p>Du wurdest in diesen Chat eingeladen.</p><button class="primary-button" id="join-room">Einladung annehmen</button></div>
+        <form class="composer" id="composer">
+          <label class="sr-only" for="message-input">Nachricht</label>
+          <textarea id="message-input" rows="1" maxlength="16384" placeholder="Nachricht schreiben …"></textarea>
+          <button class="send-button" id="send-message" type="submit" aria-label="Nachricht senden" title="Nachricht senden">↑</button>
+          <p class="composer-hint" id="composer-hint">Enter zum Senden · Shift + Enter für eine neue Zeile</p>
+          <p class="composer-error hidden" id="composer-error" role="alert"></p>
+        </form>
+      </section>
+      <button class="verification-banner hidden" id="verification-banner"><span aria-hidden="true">◇</span><span id="verification-banner-text">Gerätebestätigung angefragt</span><span aria-hidden="true">→</span></button>
+    </main>
+  </div>
+  <dialog id="direct-dialog">
+    <form id="direct-form" class="dialog-content">
+      <div class="dialog-header"><h2>Neue Direktnachricht</h2><button class="icon-button" type="button" id="close-direct" aria-label="Schließen">×</button></div>
+      <p>Schreibe einer Person auf Matrix. Sie erhält eine Einladung zu eurem Chat.</p>
+      <label for="direct-user">Matrix-ID</label><input id="direct-user" type="text" placeholder="@name:server.org" autocomplete="off" required>
+      <p class="form-error hidden" id="direct-error" role="alert"></p>
+      <button class="primary-button" id="create-direct" type="submit">Chat öffnen</button>
+    </form>
+  </dialog>
+  <dialog id="verification-dialog">
+    <div class="dialog-content">
+      <div class="dialog-header"><h2>Gerät bestätigen</h2><button class="icon-button" type="button" id="close-verification" aria-label="Schließen">×</button></div>
+      <p id="verification-description"></p>
+      <div class="verification-devices" id="verification-devices"></div>
+      <div class="verification-emoji" id="verification-emoji"></div>
+      <p class="form-error hidden" id="verification-error" role="alert"></p>
+      <div class="dialog-actions"><button class="quiet-button" id="verification-cancel">Abbrechen</button><button class="primary-button" id="verification-confirm">Bestätigen</button></div>
+    </div>
+  </dialog>
+</body>
+</html>

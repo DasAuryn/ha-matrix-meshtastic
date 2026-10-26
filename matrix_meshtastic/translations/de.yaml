@@ -1,16 +1,16 @@
 configuration:
   matrix:
     name: Matrix
-    description: Zugang zu deinem vorhandenen Matrix-Server und dem gewünschten Raum.
+    description: Zugang zu deinem vorhandenen Matrix-Server für den eigenständigen Messenger.
     fields:
       homeserver:
         name: Homeserver
         description: HTTPS-Adresse des Matrix-Servers, beispielsweise https://matrix.org.
       user_id:
-        name: Bot-Benutzer
-        description: Vollständige Matrix-ID des Bot-Kontos, beispielsweise @meshbot:example.org.
+        name: Matrix-Benutzer
+        description: Vollständige Matrix-ID des verwendeten Kontos, beispielsweise @meshbot:example.org.
       password:
-        name: Bot-Passwort
+        name: Matrix-Passwort
         description: Passwort für die erste Anmeldung. Alternativ Access-Token und Geräte-ID eintragen.
       access_token:
         name: Access-Token
@@ -19,12 +19,15 @@ configuration:
         name: Geräte-ID
         description: Geräte-ID zur Token-Anmeldung. Bei Passwort-Anmeldung kann dieses Feld leer bleiben.
       room_id:
-        name: Raum
-        description: Interne Matrix-Raum-ID mit !, bei neuen Räumen ohne Server-Endung. Alternativ ein Raum-Alias (#raum:example.org).
+        name: Raum für Meshtastic
+        description: Optionaler Bridge-Raum mit interner !Raum-ID oder #Alias. Für den reinen Matrix-Messenger leer lassen.
   meshtastic:
     name: Meshtastic
-    description: Eine Verbindungsart auswählen und die zugehörigen Felder ausfüllen.
+    description: Optionale Funkweiterleitung. Matrix-Chats funktionieren auch ohne Funkgerät.
     fields:
+      enabled:
+        name: Meshtastic aktivieren
+        description: Aktiviert die Funkweiterleitung für den Bridge-Raum. Ohne privaten Schlüssel bleibt nur die Funkweiterleitung gesperrt.
       connection:
         name: Verbindung
         description: usb, tcp, bluetooth oder mqtt. Es ist jeweils eine Verbindung aktiv.

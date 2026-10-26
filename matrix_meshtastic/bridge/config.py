@@ -19,6 +19,7 @@ class MatrixSettings:
 
 @dataclass(frozen=True)
 class RadioSettings:
+    enabled: bool = False
     connection: str = "tcp"
     channel_index: int = 0
     channel_psk: str = field(default="", repr=False)
@@ -78,13 +79,33 @@ class Settings:
         is_room = room_id.startswith("!") and len(room_id) > 1
         alias_local, separator, alias_server = room_id.partition(":")
         is_alias = alias_local.startswith("#") and len(alias_local) > 1 and separator and alias_server
-        if not (is_room or is_alias) or "\x00" in room_id:
+        if (room_id and not (is_room or is_alias)) or "\x00" in room_id:
             raise ValueError("Eine Matrix-Raum-ID oder ein Raumalias wird benötigt.")
         if not matrix.password and not matrix.access_token:
             raise ValueError("Ein Matrix-Passwort oder Access-Token wird benötigt.")
         if matrix.access_token and not matrix.device_id:
             raise ValueError("Zum Matrix-Access-Token gehört die zugehörige Geräte-ID.")
+        if not isinstance(self.meshtastic.enabled, bool):
+            raise ValueError("meshtastic.enabled muss ein Wahrheitswert sein.")
+        forwarding = self.forwarding
+        if (
+            not isinstance(forwarding.include_sender, bool)
+            or type(forwarding.max_parts) is not int
+            or type(forwarding.max_message_age_seconds) is not int
+            or type(forwarding.message_interval_seconds) not in (int, float)
+            or not math.isfinite(forwarding.message_interval_seconds)
+            or not isinstance(forwarding.long_message, str)
+        ):
+            raise ValueError("Ungültige Datentypen für die Weiterleitung.")
+        if forwarding.long_message not in ("split", "truncate") or not 1 <= forwarding.max_parts <= 16:
+            raise ValueError("Ungültige Behandlung langer Nachrichten.")
+        if not 2 <= forwarding.message_interval_seconds <= 3600 or not 1 <= forwarding.max_message_age_seconds <= 86400:
+            raise ValueError("Ungültiges Sendeintervall oder Nachrichtenalter.")
+
+    def validate_radio(self) -> None:
         radio = self.meshtastic
+        if not isinstance(radio.enabled, bool):
+            raise ValueError("meshtastic.enabled muss ein Wahrheitswert sein.")
         text_fields = (
             "connection", "channel_psk", "tcp_host", "serial_device", "ble_address",
             "mqtt_host", "mqtt_username", "mqtt_password", "mqtt_topic",
@@ -121,17 +142,3 @@ class Settings:
                 raise ValueError("Die MQTT-Gateway-ID muss im Format !1234abcd vorliegen.") from exc
             if not radio.mqtt_gateway_id.startswith("!") or len(radio.mqtt_gateway_id) != 9 or not 3 < node_id < 0xFFFFFFFF:
                 raise ValueError("Die MQTT-Gateway-ID muss im Format !1234abcd vorliegen.")
-        forwarding = self.forwarding
-        if (
-            not isinstance(forwarding.include_sender, bool)
-            or type(forwarding.max_parts) is not int
-            or type(forwarding.max_message_age_seconds) is not int
-            or type(forwarding.message_interval_seconds) not in (int, float)
-            or not math.isfinite(forwarding.message_interval_seconds)
-            or not isinstance(forwarding.long_message, str)
-        ):
-            raise ValueError("Ungültige Datentypen für die Weiterleitung.")
-        if forwarding.long_message not in ("split", "truncate") or not 1 <= forwarding.max_parts <= 16:
-            raise ValueError("Ungültige Behandlung langer Nachrichten.")
-        if not 2 <= forwarding.message_interval_seconds <= 3600 or not 1 <= forwarding.max_message_age_seconds <= 86400:
-            raise ValueError("Ungültiges Sendeintervall oder Nachrichtenalter.")

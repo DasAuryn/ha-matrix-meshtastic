@@ -23,7 +23,7 @@ async def main() -> None:
         loop = asyncio.get_running_loop()
         for sig in (signal.SIGINT, signal.SIGTERM):
             loop.add_signal_handler(sig, bridge.stop.set)
-        logging.info("Matrix-Meshtastic-Bridge startet mit %s auf Channel %d.", settings.meshtastic.connection, settings.meshtastic.channel_index)
+        logging.info("Matrix-Messenger startet; Meshtastic-Weiterleitung %s.", "aktiviert" if settings.meshtastic.enabled else "deaktiviert")
         await bridge.run()
     except (ChannelSecurityError, ValueError) as exc:
         logging.error("Bridge gesperrt: %s", exc)

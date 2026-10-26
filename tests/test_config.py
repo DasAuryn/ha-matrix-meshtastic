@@ -31,15 +31,42 @@ def valid_options(addon_defaults):
     return options
 
 
-def load_options(tmp_path, options):
+def load_options(tmp_path, options, validate_radio=True):
     path = tmp_path / "options.json"
     path.write_text(json.dumps(options))
-    return Settings.load(path)
+    settings = Settings.load(path)
+    if validate_radio:
+        settings.validate_radio()
+    return settings
 
 
 def test_addon_defaults_require_user_configuration(tmp_path, addon_defaults):
     with pytest.raises(ValueError):
         load_options(tmp_path, addon_defaults)
+
+
+def test_matrix_messenger_starts_without_radio_or_bridge_room(tmp_path, valid_options, addon_defaults):
+    valid_options["matrix"]["room_id"] = ""
+    valid_options["meshtastic"] = copy.deepcopy(addon_defaults["meshtastic"])
+    settings = load_options(tmp_path, valid_options, validate_radio=False)
+    assert settings.matrix.room_id == ""
+    assert settings.meshtastic.enabled is False
+    assert settings.meshtastic.channel_psk == ""
+
+
+def test_radio_security_error_does_not_invalidate_matrix_configuration(tmp_path, valid_options):
+    valid_options["meshtastic"].update(enabled=True, channel_psk="")
+    settings = load_options(tmp_path, valid_options, validate_radio=False)
+    settings.validate()
+    with pytest.raises(ValueError):
+        settings.validate_radio()
+
+
+@pytest.mark.parametrize("enabled", ["false", 1, None])
+def test_radio_enabled_requires_boolean(tmp_path, valid_options, enabled):
+    valid_options["meshtastic"]["enabled"] = enabled
+    with pytest.raises(ValueError):
+        load_options(tmp_path, valid_options, validate_radio=False)
 
 
 @pytest.mark.parametrize(

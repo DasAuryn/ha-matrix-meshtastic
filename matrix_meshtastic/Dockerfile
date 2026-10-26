@@ -9,11 +9,11 @@ RUN pip wheel --no-cache-dir --wheel-dir /wheels -r /tmp/requirements.txt
 
 FROM python:3.13-slim-bookworm
 
-ARG BUILD_VERSION=0.1.1
+ARG BUILD_VERSION=0.2.0
 ARG BUILD_ARCH
 
 LABEL io.hass.name="Matrix Meshtastic Bridge" \
-    io.hass.description="Bridge Matrix and a private Meshtastic channel" \
+    io.hass.description="Matrix messenger with an optional private Meshtastic bridge" \
     io.hass.type="app" \
     io.hass.version="${BUILD_VERSION}" \
     io.hass.arch="${BUILD_ARCH}"

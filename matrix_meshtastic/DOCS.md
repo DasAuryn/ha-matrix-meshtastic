@@ -1,6 +1,6 @@
 # Matrix Meshtastic Bridge
 
-Dieses Add-on verbindet einen Matrix-Raum mit einem privaten Meshtastic-Channel in beide Richtungen. Es verwendet einen vorhandenen Matrix-Server. Weitere Add-ons werden nicht automatisch installiert.
+Diese App ist ein eigenständiger Matrix-Messenger mit einer optionalen bidirektionalen Meshtastic-Bridge. Sie verwendet einen vorhandenen Matrix-Server. Matrix funktioniert auch ohne Funkgerät, MQTT-Broker oder Meshtastic-Schlüssel.
 
 ## Einrichtung
 
@@ -15,12 +15,26 @@ Home Assistant baut die App bei der ersten Installation aus dem mitgelieferten D
 
 Für eine lokale Installation den Ordner `matrix_meshtastic` in das Add-on-Verzeichnis `/addons` von Home Assistant kopieren. Danach den Add-on-Store aktualisieren und „Matrix Meshtastic Bridge“ unter den lokalen Add-ons installieren.
 
-1. Ein eigenes Matrix-Bot-Konto auf deinem Homeserver anlegen und in den gewünschten Raum einladen.
-2. Unter `matrix` die Homeserver-Adresse, die vollständige `user_id` und die interne `room_id` mit `!` eintragen. Bei Raumversion 12 hat diese ID keine Server-Endung; ältere IDs sehen wie `!raum:example.org` aus. Alternativ zur Raum-ID ist ein Raum-Alias wie `#raum:example.org` möglich.
-3. Für die Anmeldung entweder `password` oder `access_token` zusammen mit dessen `device_id` eintragen.
-4. Unter `meshtastic.connection` eine Verbindungsart auswählen und deren Felder ausfüllen.
-5. `channel_index` auf den lokalen privaten Channel des Knotens setzen und dessen AES-Schlüssel als Base64 in `channel_psk` eintragen.
-6. Das Add-on starten. Nachrichten im Matrix-Raum werden auf diesen Channel gesendet; Textnachrichten dieses Channels erscheinen über das Bot-Konto im selben Matrix-Raum.
+## Matrix-Messenger ohne Meshtastic
+
+1. Unter `matrix` die Homeserver-Adresse und die vollständige `user_id` des gewünschten Matrix-Kontos eintragen.
+2. Für die Anmeldung entweder `password` oder `access_token` zusammen mit dessen `device_id` eintragen.
+3. `meshtastic.enabled` auf `false` lassen. Die Funkfelder und `matrix.room_id` dürfen leer bleiben.
+4. Die App starten und **Web-Oberfläche öffnen** auswählen. Alternativ die Ingress-Oberfläche als **Matrix Messenger** in der Seitenleiste anzeigen.
+
+Der Messenger zeigt die Räume, Direktnachrichten und Einladungen des angemeldeten Kontos. Nachrichten lassen sich lesen und schreiben, ältere Nachrichten nachladen, Einladungen annehmen und Direktnachrichten über eine Matrix-Benutzer-ID beginnen. Bestehende Nachrichten werden zur Anzeige synchronisiert, aber beim ersten Start nicht nachträglich ins Funknetz übertragen.
+
+Chatverlauf und Geräteschlüssel bleiben unter `/data` gespeichert und sind Teil des App-Backups. Bei einer Unterbrechung bleibt der vorhandene lokale Verlauf sichtbar. Ein Wechsel des Matrix-Kontos trennt dessen Chatdaten vom vorherigen Konto. Zugangstoken und Schlüssel werden nicht an den Browser ausgegeben. Die Oberfläche ist ausschließlich über den authentifizierten Home-Assistant-Ingress zugänglich.
+
+## Optionale Meshtastic-Bridge
+
+1. `meshtastic.enabled` auf `true` setzen.
+2. In `matrix.room_id` den Raum für die Funkweiterleitung eintragen. Bei Raumversion 12 ist das eine interne ID mit `!` ohne Server-Endung; ältere IDs sehen wie `!raum:example.org` aus. Alternativ ist ein Alias wie `#raum:example.org` möglich. Das Matrix-Konto muss dem Raum angehören.
+3. Unter `meshtastic.connection` eine Verbindungsart auswählen und deren Felder ausfüllen.
+4. `channel_index` auf den lokalen privaten Channel des Knotens setzen und dessen AES-Schlüssel als Base64 in `channel_psk` eintragen.
+5. Die App neu starten. Nur der ausgewählte Matrix-Raum wird mit diesem Funkchannel verbunden. Andere Räume und Direktnachrichten bleiben im Matrix-Messenger.
+
+Ein fehlender oder unzulässiger Schlüssel sperrt nur die Funkweiterleitung. Ein nicht verbundenes Funkgerät wird erneut verbunden, während Matrix und Ingress weiterlaufen. Beide Verbindungszustände werden in der Oberfläche angezeigt. Nach einem Update von 0.1.x ist Meshtastic standardmäßig ausgeschaltet und muss bei Bedarf ausdrücklich aktiviert werden.
 
 Die Channel-Nummer von 0 bis 7 bezeichnet einen Slot auf dem Knoten. Channel-Name, Schlüssel und Funkkonfiguration müssen dort bereits eingerichtet sein. Die Bridge konfiguriert keine Channels auf dem Gerät.
 
@@ -28,7 +42,7 @@ Die Channel-Nummer von 0 bis 7 bezeichnet einen Slot auf dem Knoten. Channel-Nam
 
 `channel_psk` muss einen eigenen AES-Schlüssel mit 16 oder 32 Bytes enthalten. Leere Schlüssel, Nullschlüssel, Ein-Byte-Aliase wie `AQ==` und bekannte öffentliche Standardschlüssel werden abgewiesen. Bei USB, TCP und Bluetooth liest die Bridge vor einer Weiterleitung die Channel-Konfiguration frisch vom Knoten und vergleicht den Schlüssel. Über MQTT müssen Gateway und Bridge manuell passend konfiguriert werden.
 
-Die direkte Meshtastic-API bietet keinen atomaren Befehl für Schlüsselprüfung und anschließendes Senden. Die Channel-Konfiguration deshalb während des Bridge-Betriebs nicht über andere Clients ändern. Bei einer erkannten Abweichung stoppt die Bridge; sie legt keinen Ersatzchannel an und weicht nicht auf Channel 0 aus.
+Die direkte Meshtastic-API bietet keinen atomaren Befehl für Schlüsselprüfung und anschließendes Senden. Die Channel-Konfiguration deshalb während des Bridge-Betriebs nicht über andere Clients ändern. Bei einer erkannten Abweichung stoppt die Funkweiterleitung; der Matrix-Messenger läuft weiter. Es wird kein Ersatzchannel angelegt und nicht auf Channel 0 ausgewichen.
 
 Der Schlüssel darf nicht als Beispielwert aus einer öffentlich zugänglichen Konfiguration übernommen werden. Nachrichtentexte und Schlüssel werden nicht in die Betriebsprotokolle geschrieben.
 
@@ -63,7 +77,9 @@ Bei Bedarf `mqtt_username` und `mqtt_password` ergänzen. Für TLS `mqtt_tls` ak
 
 ## Verschlüsselte Matrix-Räume
 
-Matrix-Ende-zu-Ende-Verschlüsselung wird unterstützt. Gerätesitzung und Schlüssel bleiben unter `/data` erhalten und gehören zum Add-on-Backup. Andere Matrix-Geräte werden nicht automatisch als vertrauenswürdig eingestuft. Raumteilnehmer müssen dem Bot-Gerät bei Bedarf die Raum-Schlüssel freigeben. Eine interaktive Geräteverifikation bietet das Add-on derzeit nicht an. Ohne verfügbare Schlüssel kann eine Nachricht nicht entschlüsselt werden.
+Matrix-Ende-zu-Ende-Verschlüsselung wird unterstützt. Gerätesitzung und Schlüssel bleiben unter `/data` erhalten und gehören zum App-Backup. Unter **Geräte & Schlüssel** können bekannte Geräte zur Verifikation ausgewählt oder eingehende Verifikationsanfragen angenommen werden. Die angezeigten Emojis mit dem anderen Gerät vergleichen und nur bei Übereinstimmung auf beiden Geräten bestätigen. Andere Geräte werden nicht automatisch als vertrauenswürdig eingestuft.
+
+Raumteilnehmer müssen dem verwendeten Gerät bei Bedarf die Raum-Schlüssel freigeben. Noch nicht entschlüsselbare Nachrichten werden als solche dargestellt und bei verfügbaren Schlüsseln erneut entschlüsselt. Ohne verfügbare Schlüssel ist deren Inhalt nicht lesbar. Der Messenger zeigt in dieser Version Textnachrichten; Datei- und Medienversand ist nicht enthalten.
 
 Die Bridge entschlüsselt Nachrichten zwischen den beiden Systemen. Für die Funkübertragung gilt der private Meshtastic-Schlüssel; die Matrix-Verschlüsselung reicht nicht bis zum Funkgerät.
 

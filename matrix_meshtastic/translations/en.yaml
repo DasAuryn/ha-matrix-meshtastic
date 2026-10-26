@@ -1,16 +1,16 @@
 configuration:
   matrix:
     name: Matrix
-    description: Connect to your existing Matrix server and the selected room.
+    description: Connect to your existing Matrix server for the standalone messenger.
     fields:
       homeserver:
         name: Homeserver
         description: HTTPS URL of the Matrix server, for example https://matrix.org.
       user_id:
-        name: Bot user
-        description: Full Matrix ID of the bot account, for example @meshbot:example.org.
+        name: Matrix user
+        description: Full Matrix ID of the account, for example @meshbot:example.org.
       password:
-        name: Bot password
+        name: Matrix password
         description: Password for the initial login. Alternatively, provide an access token and device ID.
       access_token:
         name: Access token
@@ -19,12 +19,15 @@ configuration:
         name: Device ID
         description: Device ID for token authentication. Leave empty when using password authentication.
       room_id:
-        name: Room
-        description: Internal Matrix room ID starting with !, without a server suffix for newer rooms. Alternatively, a room alias (#room:example.org).
+        name: Room for Meshtastic
+        description: Optional bridge room with an internal !room ID or #alias. Leave empty for the standalone Matrix messenger.
   meshtastic:
     name: Meshtastic
-    description: Select one connection type and fill in its corresponding fields.
+    description: Optional radio forwarding. Matrix chats also work without a radio.
     fields:
+      enabled:
+        name: Enable Meshtastic
+        description: Enable radio forwarding for the bridge room. Without a private key, only radio forwarding is blocked.
       connection:
         name: Connection
         description: usb, tcp, bluetooth or mqtt. One connection is active at a time.

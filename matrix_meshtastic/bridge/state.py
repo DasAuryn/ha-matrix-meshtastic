@@ -66,6 +66,10 @@ class State:
         with self.db:
             return self._enqueue("matrix", event_id, [body], timestamp_ms)
 
+    def mesh_message(self, event_id: str, parts: list[str], timestamp_ms: int) -> bool:
+        with self.db:
+            return self._enqueue("mesh", event_id, parts, timestamp_ms)
+
     def next(self, direction: str, max_age_seconds: int) -> PendingMessage | None:
         cutoff = int(time.time() * 1000) - max_age_seconds * 1000
         with self.db:
