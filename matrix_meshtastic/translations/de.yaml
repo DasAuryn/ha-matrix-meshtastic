@@ -1,0 +1,91 @@
+configuration:
+  matrix:
+    name: Matrix
+    description: Zugang zu deinem vorhandenen Matrix-Server und dem gewünschten Raum.
+    fields:
+      homeserver:
+        name: Homeserver
+        description: HTTPS-Adresse des Matrix-Servers, beispielsweise https://matrix.org.
+      user_id:
+        name: Bot-Benutzer
+        description: Vollständige Matrix-ID des Bot-Kontos, beispielsweise @meshbot:example.org.
+      password:
+        name: Bot-Passwort
+        description: Passwort für die erste Anmeldung. Alternativ Access-Token und Geräte-ID eintragen.
+      access_token:
+        name: Access-Token
+        description: Optionaler Matrix-Zugangstoken. Zusammen mit der zugehörigen Geräte-ID verwenden.
+      device_id:
+        name: Geräte-ID
+        description: Geräte-ID zur Token-Anmeldung. Bei Passwort-Anmeldung kann dieses Feld leer bleiben.
+      room_id:
+        name: Raum
+        description: Matrix-Raum-ID (!raum:example.org) oder Raum-Alias (#raum:example.org).
+  meshtastic:
+    name: Meshtastic
+    description: Eine Verbindungsart auswählen und die zugehörigen Felder ausfüllen.
+    fields:
+      connection:
+        name: Verbindung
+        description: usb, tcp, bluetooth oder mqtt. Es ist jeweils eine Verbindung aktiv.
+      channel_index:
+        name: Zielchannel
+        description: Lokaler Channel-Index des angeschlossenen Knotens von 0 bis 7.
+      channel_psk:
+        name: Privater Channel-Schlüssel
+        description: Base64-kodierter AES-Schlüssel mit 16 oder 32 Bytes. Öffentliche Standardschlüssel und Ein-Byte-Schlüssel werden abgewiesen.
+      tcp_host:
+        name: TCP-Host
+        description: IP-Adresse oder Hostname des Meshtastic-Knotens bei TCP-Verbindung.
+      tcp_port:
+        name: TCP-Port
+        description: Meshtastic-API-Port, üblicherweise 4403.
+      serial_device:
+        name: USB-Gerätepfad
+        description: Gerätepfad, vorzugsweise /dev/serial/by-id/… statt /dev/ttyUSB0.
+      ble_address:
+        name: Bluetooth-Adresse
+        description: Bluetooth-MAC-Adresse des Knotens. Benötigt einen lokalen Bluetooth-Adapter.
+      mqtt_host:
+        name: MQTT-Broker
+        description: Hostname oder IP-Adresse des Brokers, den auch der Gateway-Knoten verwendet.
+      mqtt_port:
+        name: MQTT-Port
+        description: Üblicherweise 1883 ohne TLS oder 8883 mit TLS.
+      mqtt_username:
+        name: MQTT-Benutzer
+        description: Benutzername für den MQTT-Broker, falls erforderlich.
+      mqtt_password:
+        name: MQTT-Passwort
+        description: Passwort für den MQTT-Broker, falls erforderlich.
+      mqtt_tls:
+        name: MQTT mit TLS
+        description: TLS aktivieren. Das Serverzertifikat wird gegen die System-Zertifikate geprüft.
+      mqtt_topic:
+        name: MQTT-Topic-Präfix
+        description: Verschlüsselter Protobuf-Topic-Präfix des Gateways, beispielsweise msh/EU_868/2/e.
+      mqtt_channel_name:
+        name: MQTT-Channel-Name
+        description: Exakter Name des privaten Channels auf dem Gateway.
+      mqtt_gateway_id:
+        name: MQTT-Gateway-ID
+        description: Node-ID des tatsächlichen Gateway-Knotens, beispielsweise !abcd1234. Nur von diesem Gateway werden MQTT-Nachrichten angenommen.
+  forwarding:
+    name: Weiterleitung
+    description: Formatierung, Altersgrenze und Sendepausen für Matrix-Nachrichten.
+    fields:
+      include_sender:
+        name: Absender voranstellen
+        description: Matrix-Absender vor den Nachrichtentext setzen.
+      max_message_age_seconds:
+        name: Maximales Nachrichtenalter
+        description: Ältere Nachrichten verwerfen, auch wenn sie noch in der Warteschlange stehen. Angabe in Sekunden.
+      message_interval_seconds:
+        name: Sendepause
+        description: Mindestpause zwischen Nachrichten beziehungsweise Nachrichtenteilen. Angabe in Sekunden, mindestens 2.
+      long_message:
+        name: Lange Nachrichten
+        description: split teilt lange Texte auf, truncate kürzt sie auf ein Funkpaket.
+      max_parts:
+        name: Maximale Anzahl Teile
+        description: Höchstzahl der Funkpakete pro Matrix-Nachricht. Darüber hinausgehender Text wird gekürzt.

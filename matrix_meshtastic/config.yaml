@@ -1,0 +1,74 @@
+name: Matrix Meshtastic Bridge
+version: "0.1.0"
+slug: matrix_meshtastic
+description: Nachrichten zwischen einem Matrix-Raum und einem privaten Meshtastic-Channel austauschen.
+arch:
+  - aarch64
+  - amd64
+startup: application
+boot: auto
+stage: experimental
+init: true
+uart: true
+host_dbus: true
+host_network: true
+options:
+  matrix:
+    homeserver: https://matrix.org
+    user_id: ""
+    password: ""
+    access_token: ""
+    device_id: ""
+    room_id: ""
+  meshtastic:
+    connection: tcp
+    channel_index: 0
+    channel_psk: ""
+    tcp_host: ""
+    tcp_port: 4403
+    serial_device: ""
+    ble_address: ""
+    mqtt_host: ""
+    mqtt_port: 1883
+    mqtt_username: ""
+    mqtt_password: ""
+    mqtt_tls: false
+    mqtt_topic: msh/EU_868/2/e
+    mqtt_channel_name: ""
+    mqtt_gateway_id: ""
+  forwarding:
+    include_sender: true
+    max_message_age_seconds: 300
+    message_interval_seconds: 5
+    long_message: split
+    max_parts: 4
+schema:
+  matrix:
+    homeserver: url
+    user_id: str
+    password: password
+    access_token: password
+    device_id: str
+    room_id: str
+  meshtastic:
+    connection: list(usb|tcp|bluetooth|mqtt)
+    channel_index: int(0,7)
+    channel_psk: password
+    tcp_host: str
+    tcp_port: port
+    serial_device: str
+    ble_address: str
+    mqtt_host: str
+    mqtt_port: port
+    mqtt_username: str
+    mqtt_password: password
+    mqtt_tls: bool
+    mqtt_topic: str
+    mqtt_channel_name: str
+    mqtt_gateway_id: str
+  forwarding:
+    include_sender: bool
+    max_message_age_seconds: int(1,86400)
+    message_interval_seconds: float(2,3600)
+    long_message: list(split|truncate)
+    max_parts: int(1,16)

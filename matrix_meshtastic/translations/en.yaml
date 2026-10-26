@@ -1,0 +1,91 @@
+configuration:
+  matrix:
+    name: Matrix
+    description: Connect to your existing Matrix server and the selected room.
+    fields:
+      homeserver:
+        name: Homeserver
+        description: HTTPS URL of the Matrix server, for example https://matrix.org.
+      user_id:
+        name: Bot user
+        description: Full Matrix ID of the bot account, for example @meshbot:example.org.
+      password:
+        name: Bot password
+        description: Password for the initial login. Alternatively, provide an access token and device ID.
+      access_token:
+        name: Access token
+        description: Optional Matrix access token. Use it with its associated device ID.
+      device_id:
+        name: Device ID
+        description: Device ID for token authentication. Leave empty when using password authentication.
+      room_id:
+        name: Room
+        description: Matrix room ID (!room:example.org) or alias (#room:example.org).
+  meshtastic:
+    name: Meshtastic
+    description: Select one connection type and fill in its corresponding fields.
+    fields:
+      connection:
+        name: Connection
+        description: usb, tcp, bluetooth or mqtt. One connection is active at a time.
+      channel_index:
+        name: Destination channel
+        description: Local channel index on the connected node, from 0 to 7.
+      channel_psk:
+        name: Private channel key
+        description: Base64-encoded AES key containing 16 or 32 bytes. Public default keys and one-byte keys are rejected.
+      tcp_host:
+        name: TCP host
+        description: IP address or hostname of the Meshtastic node when connecting over TCP.
+      tcp_port:
+        name: TCP port
+        description: Meshtastic API port, usually 4403.
+      serial_device:
+        name: USB device path
+        description: Device path, preferably /dev/serial/by-id/… instead of /dev/ttyUSB0.
+      ble_address:
+        name: Bluetooth address
+        description: Bluetooth MAC address of the node. Requires a local Bluetooth adapter.
+      mqtt_host:
+        name: MQTT broker
+        description: Hostname or IP address of the broker used by the gateway node.
+      mqtt_port:
+        name: MQTT port
+        description: Usually 1883 without TLS or 8883 with TLS.
+      mqtt_username:
+        name: MQTT username
+        description: MQTT broker username, if required.
+      mqtt_password:
+        name: MQTT password
+        description: MQTT broker password, if required.
+      mqtt_tls:
+        name: MQTT TLS
+        description: Enable TLS. The server certificate is checked against the system certificate authorities.
+      mqtt_topic:
+        name: MQTT topic prefix
+        description: Gateway encrypted Protobuf topic prefix, for example msh/EU_868/2/e.
+      mqtt_channel_name:
+        name: MQTT channel name
+        description: Exact name of the private channel configured on the gateway.
+      mqtt_gateway_id:
+        name: MQTT gateway ID
+        description: Node ID of the actual gateway, for example !abcd1234. MQTT messages are accepted only from this gateway.
+  forwarding:
+    name: Forwarding
+    description: Message formatting, age limit and transmission spacing.
+    fields:
+      include_sender:
+        name: Include sender
+        description: Prefix messages with the Matrix sender.
+      max_message_age_seconds:
+        name: Maximum message age
+        description: Discard older messages, including queued messages. Value in seconds.
+      message_interval_seconds:
+        name: Transmission interval
+        description: Minimum delay between messages or message parts, in seconds. Minimum 2.
+      long_message:
+        name: Long messages
+        description: split divides long messages into parts; truncate shortens them to one packet.
+      max_parts:
+        name: Maximum parts
+        description: Maximum radio packets per Matrix message. Any remaining text is truncated.

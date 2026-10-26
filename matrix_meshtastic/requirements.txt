@@ -1,0 +1,4 @@
+matrix-nio[e2e]==0.26.0
+meshtastic==2.7.11
+paho-mqtt==2.1.0
+cryptography==46.0.5
