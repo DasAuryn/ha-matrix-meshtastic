@@ -111,6 +111,7 @@ class MatrixReceiver:
         self._direct_rooms: dict[str, list[str]] = self.chat_store.get_metadata("direct_rooms", {})
         self.on_messenger_send: Callable[[MatrixMessage], Awaitable[None]] | None = None
         self._key_retry_lock = asyncio.Lock()
+        self._key_import_lock = asyncio.Lock()
         self._missing_keys_logged: set[tuple[str, str]] = set()
 
     def _new_client(self, device_id: str) -> AsyncClient:
@@ -624,10 +625,10 @@ class MatrixReceiver:
             raise ValueError("Eine Schlüsseldatei mit höchstens 10 MB wird benötigt.")
         if not isinstance(passphrase, str) or not passphrase or len(passphrase) > 4096:
             raise ValueError("Das Passwort der exportierten Schlüsseldatei wird benötigt.")
-        if not getattr(client, "olm", None):
+        if not getattr(client, "olm", None) or not getattr(client, "store", None):
             raise MatrixActionError("encryption_not_ready", "Die Matrix-Verschlüsselung ist noch nicht bereit.")
-        async with self._key_retry_lock:
-            before = len(list(client.olm.inbound_group_store))
+
+        def decode_export():
             descriptor, filename = tempfile.mkstemp(prefix=".room-keys-", dir=self.data_dir)
             try:
                 with os.fdopen(descriptor, "wb") as handle:
@@ -635,8 +636,8 @@ class MatrixReceiver:
                     handle.flush()
                     os.fsync(handle.fileno())
                 try:
-                    await client.import_keys(filename, passphrase)
-                except (EncryptionError, ValueError, UnicodeError, OSError):
+                    return client.olm.import_keys_static(filename, passphrase.encode("utf-8"))
+                except (EncryptionError, ValueError, UnicodeError, OSError, TypeError, KeyError, IndexError):
                     raise MatrixActionError(
                         "key_import_failed",
                         "Die Schlüsseldatei konnte nicht geöffnet werden. Exportdatei und deren Exportpasswort prüfen.",
@@ -644,8 +645,41 @@ class MatrixReceiver:
                     ) from None
             finally:
                 Path(filename).unlink(missing_ok=True)
-            imported = max(0, len(list(client.olm.inbound_group_store)) - before)
-            decrypted = self._decrypt_for_display()
+
+        if self._key_import_lock.locked():
+            raise MatrixActionError("key_import_busy", "Ein Schlüsselimport läuft bereits. Bitte kurz warten und erneut versuchen.")
+        LOGGER.info("Schlüsselimport gestartet (%d Bytes).", len(data))
+        async with self._key_import_lock:
+            sessions = await asyncio.to_thread(decode_export)
+            try:
+                await asyncio.wait_for(self._key_retry_lock.acquire(), 10)
+            except asyncio.TimeoutError:
+                raise MatrixActionError("key_import_busy", "Eine Schlüsselanforderung läuft noch. Bitte kurz warten und erneut versuchen.") from None
+            try:
+                group_store = client.olm.inbound_group_store
+                before = len(list(group_store))
+                for offset in range(0, len(sessions), 50):
+                    if self._require_ready() is not client:
+                        raise MatrixActionError("account_changed", "Das Matrix-Konto wurde inzwischen gewechselt.")
+                    pending = {}
+                    for session in sessions[offset:offset + 50]:
+                        key = (session.room_id, session.sender_key, session.id)
+                        existing = pending.get(key) or group_store.get(*key)
+                        if existing is None or session.first_known_index < existing.first_known_index:
+                            pending[key] = session
+                    with client.store.database.atomic():
+                        for session in pending.values():
+                            client.store.save_inbound_group_session(session)
+                    for session in pending.values():
+                        group_store.add(session)
+                    await asyncio.sleep(0)
+                if self._require_ready() is not client:
+                    raise MatrixActionError("account_changed", "Das Matrix-Konto wurde inzwischen gewechselt.")
+                imported = max(0, len(list(group_store)) - before)
+                decrypted = self._decrypt_for_display()
+            finally:
+                self._key_retry_lock.release()
+        LOGGER.info("Schlüsselimport abgeschlossen: %d neue Schlüssel, %d Nachrichten entschlüsselt.", imported, decrypted)
         return {"imported_keys": imported, "decrypted_messages": decrypted, **self.encryption_diagnostics()}
 
     async def retry_keys(self, room_id: str | None = None) -> dict:

@@ -13,6 +13,9 @@ const view = {
   reads: new Map(),
   loading: new Set(),
   activeVerification: null,
+  verificationTargets: [],
+  verificationTargetRoom: null,
+  verificationNotice: "",
   settings: null,
   setupOpened: false,
   fingerprintDevice: null,
@@ -39,9 +42,12 @@ function errorText(node, message) {
   show(node, Boolean(message));
 }
 
-async function api(path, data) {
+async function api(path, data, requestOptions = {}) {
   const generation = view.accountGeneration;
   const options = {cache: "no-store", credentials: "same-origin", headers: {Accept: "application/json"}};
+  const controller = new AbortController();
+  const timeout = window.setTimeout(() => controller.abort(), requestOptions.timeout || 70000);
+  options.signal = controller.signal;
   if (view.state.account_id) options.headers["X-Matrix-Account"] = view.state.account_id;
   if (data !== undefined) {
     options.method = "POST";
@@ -55,15 +61,28 @@ async function api(path, data) {
   let response;
   try {
     response = await fetch(new URL(path, document.baseURI), options);
-  } catch {
+  } catch (error) {
+    window.clearTimeout(timeout);
+    if (error.name === "AbortError") {
+      const timedOut = new Error("Die Anfrage dauert zu lange. Verbindung und App-Protokoll prüfen und anschließend erneut versuchen.");
+      timedOut.code = "request_timeout";
+      throw timedOut;
+    }
     throw new Error("Die Verbindung zum Messenger wurde unterbrochen.");
   }
   let value;
   try {
     value = await response.json();
-  } catch {
+  } catch (error) {
+    window.clearTimeout(timeout);
+    if (error.name === "AbortError") {
+      const timedOut = new Error("Die Antwort dauert zu lange. Verbindung und App-Protokoll prüfen und anschließend erneut versuchen.");
+      timedOut.code = "request_timeout";
+      throw timedOut;
+    }
     throw new Error("Der Messenger ist derzeit nicht erreichbar.");
   }
+  window.clearTimeout(timeout);
   if (path !== "api/state" && path !== "api/settings" && path !== "api/account/logout" && generation !== view.accountGeneration) {
     const error = new Error("Das Matrix-Konto wurde gewechselt. Die vorherige Anfrage wurde verworfen.");
     error.staleAccount = true;
@@ -279,6 +298,11 @@ async function markRead(roomId) {
 
 async function selectRoom(roomId) {
   if (view.selected) view.drafts.set(view.selected, byId("message-input").value);
+  if (view.selected !== roomId) {
+    view.verificationTargets = [];
+    view.verificationTargetRoom = null;
+    view.verificationNotice = "";
+  }
   view.selected = roomId;
   byId("messenger").classList.add("chat-open");
   show(byId("welcome"), false);
@@ -333,6 +357,8 @@ async function sendMessage(event) {
   } catch (error) {
     if (error.staleAccount || generation !== view.accountGeneration) return;
     if (view.selected === roomId) {
+      view.verificationTargets = error.code === "unverified_devices" && Array.isArray(error.details?.devices) ? error.details.devices.filter(device => typeof device.user_id === "string" && typeof device.device_id === "string").map(device => ({...device})) : [];
+      view.verificationTargetRoom = error.code === "unverified_devices" ? roomId : null;
       byId("composer-error").dataset.source = "send";
       errorText(byId("composer-error"), error.message + " Dein Text bleibt erhalten. Erneutes Senden verwendet dieselbe Nachrichten-ID.");
       show(byId("composer-security"), ["unverified_devices", "encryption_not_ready"].includes(error.code));
@@ -355,6 +381,9 @@ function clearAccountView() {
   view.sending = new Set();
   view.selected = null;
   view.activeVerification = null;
+  view.verificationTargets = [];
+  view.verificationTargetRoom = null;
+  view.verificationNotice = "";
   view.fingerprintDevice = null;
   view.managedRoom = null;
   view.settings = null;
@@ -383,6 +412,9 @@ function clearAccountView() {
   byId("fingerprint-value").textContent = "";
   byId("fingerprint-device").textContent = "";
   byId("key-import-result").textContent = "";
+  byId("key-import-form").removeAttribute("aria-busy");
+  byId("import-keys").disabled = false;
+  byId("import-keys").textContent = "Schlüssel importieren";
   errorText(byId("composer-error"), "");
   show(byId("composer-security"), false);
   show(byId("crypto-notice"), false);
@@ -480,8 +512,13 @@ async function joinRoom() {
 
 function activeVerification() {
   const verifications = view.state.verification || [];
+  const finished = item => ["done", "verified", "cancelled", "canceled", "failed"].includes(item.state);
   const pinned = byId("verification-dialog").open && verifications.find(item => item.transaction_id === view.activeVerification);
-  return pinned || verifications.find(item => !["done", "verified", "cancelled", "canceled", "failed"].includes(item.state));
+  if (pinned && finished(pinned)) {
+    view.verificationNotice = ["done", "verified"].includes(pinned.state) ? "Die Gerätebestätigung ist abgeschlossen." : "Die Gerätebestätigung wurde beendet. Du kannst unten eine neue Bestätigung starten.";
+    view.activeVerification = null;
+  }
+  return pinned && !finished(pinned) ? pinned : verifications.find(item => !finished(item));
 }
 
 function renderVerification() {
@@ -502,14 +539,23 @@ function renderVerification() {
   show(confirm, Boolean(verification));
   show(cancel, Boolean(verification));
   if (!verification) {
-    byId("verification-description").textContent = "Bestätige Geräte, um verschlüsselte Chats zu verwenden. Die Bestätigung muss auf beiden Geräten übereinstimmen. Dieses Gerät: " + (view.state.device_id || "noch nicht verbunden") + ".";
-    for (const device of view.state.devices || []) {
+    const deviceKey = device => JSON.stringify([device.user_id, device.device_id]);
+    const isCurrent = device => device.own_device || device.device_id === view.state.device_id && device.user_id === view.state.user_id;
+    const targets = view.verificationTargetRoom === view.selected ? view.verificationTargets : [];
+    const targetKeys = new Set(targets.map(deviceKey));
+    const allDevices = new Map(targets.map(device => [deviceKey(device), {...device}]));
+    for (const device of view.state.devices || []) allDevices.set(deviceKey(device), {...allDevices.get(deviceKey(device)), ...device});
+    const needsConfirmation = device => targetKeys.has(deviceKey(device)) && !device.verified && !isCurrent(device);
+    const required = [...allDevices.values()].filter(needsConfirmation);
+    byId("verification-description").textContent = [view.verificationNotice, required.length ? "Für den Versand in diesem Chat die markierten Geräte bestätigen. Ein Schlüsselimport bestätigt keine Geräte." : "", "Bestätige Geräte, um verschlüsselte Chats zu verwenden. Die Bestätigung muss auf beiden Geräten übereinstimmen. Dieses Gerät: " + (view.state.device_id || "noch nicht verbunden") + "."].filter(Boolean).join(" ");
+    for (const device of [...allDevices.values()].sort((left, right) => Number(needsConfirmation(right)) - Number(needsConfirmation(left)))) {
       const row = element("div", "device-row");
       const copy = element("div", "device-copy");
       copy.append(element("strong", "", device.display_name || device.device_id), element("small", "", `${device.user_id || ""} · ${device.device_id || ""}`));
+      if (needsConfirmation(device)) copy.append(element("strong", "", "Für Versand bestätigen"));
       row.append(copy);
-      if (device.verified) row.append(element("span", "verified-label", "Bestätigt"));
-      else if (device.device_id === view.state.device_id && device.user_id === view.state.user_id) row.append(element("span", "verified-label", "Dieses Gerät"));
+      if (isCurrent(device)) row.append(element("span", "verified-label", "Dieses Gerät"));
+      else if (device.verified) row.append(element("span", "verified-label", "Bestätigt"));
       else {
         const actions = element("div", "device-actions");
         const button = element("button", "quiet-button", "Symbole vergleichen");
@@ -526,9 +572,10 @@ function renderVerification() {
       }
       devices.append(row);
     }
-    if (!(view.state.devices || []).length) devices.append(element("p", "sidebar-empty", "Noch keine Geräte verfügbar. Öffne einen verschlüsselten Chat oder starte die Bestätigung in einem anderen Matrix-Client."));
+    if (!allDevices.size) devices.append(element("p", "sidebar-empty", "Noch keine Geräte verfügbar. Öffne einen verschlüsselten Chat oder starte die Bestätigung in einem anderen Matrix-Client."));
     return;
   }
+  view.verificationNotice = "";
   view.activeVerification = verification.transaction_id;
   const values = verification.emoji || verification.emojis || [];
   const state = verification.state || "requested";
@@ -552,7 +599,10 @@ function renderVerification() {
 
 function openVerification() {
   errorText(byId("verification-error"), "");
-  if (!byId("verification-dialog").open) byId("verification-dialog").showModal();
+  if (!byId("verification-dialog").open) {
+    view.verificationNotice = "";
+    byId("verification-dialog").showModal();
+  }
   renderVerification();
 }
 
@@ -884,7 +934,14 @@ async function importKeys(event) {
   const passphrase = byId("key-passphrase").value;
   const resultText = byId("key-import-result");
   resultText.textContent = "";
-  if (!file || !passphrase) return;
+  if (!file) {
+    resultText.textContent = "Bitte zuerst die exportierte Schlüsseldatei auswählen.";
+    return;
+  }
+  if (!passphrase) {
+    resultText.textContent = "Bitte die beim Export gewählte Passphrase eingeben.";
+    return;
+  }
   if (file.size > 10 * 1024 * 1024) {
     resultText.textContent = "Die Schlüsseldatei darf höchstens 10 MB groß sein.";
     return;
@@ -892,21 +949,45 @@ async function importKeys(event) {
   const data = new FormData();
   data.append("file", file);
   data.append("passphrase", passphrase);
-  byId("import-keys").disabled = true;
+  const button = byId("import-keys");
+  button.disabled = true;
+  button.textContent = "Schlüssel werden importiert …";
+  byId("key-import-form").setAttribute("aria-busy", "true");
+  resultText.textContent = "Die Datei wird übertragen und entschlüsselt. Bei größeren Exporten kann das einige Minuten dauern. Bitte die Oberfläche geöffnet lassen.";
+  let finished = false;
+  const started = Date.now();
+  const progress = window.setInterval(() => {
+    if (finished || generation !== view.accountGeneration) return;
+    const seconds = Math.floor((Date.now() - started) / 1000);
+    resultText.textContent = `Import läuft seit ${seconds} Sekunden. Die Datei wird geprüft und die Schlüssel werden gespeichert. Der Matrix-Chat bleibt verfügbar.`;
+  }, 3000);
   try {
-    const result = await api("api/keys/import", data);
-    await refreshState();
+    const result = await api("api/keys/import", data, {timeout: 315000});
+    finished = true;
     if (generation !== view.accountGeneration) return;
     const remaining = result.pending_encrypted_count ?? result.remaining ?? view.state.diagnostics?.pending_encrypted_count;
-    resultText.textContent = "Schlüssel importiert." + (remaining === undefined ? " Verfügbare Nachrichten werden entschlüsselt." : ` ${remaining} Nachrichten warten noch auf weitere Schlüssel.`);
+    const imported = result.imported_keys;
+    const decrypted = result.decrypted_messages;
+    resultText.textContent = "Import abgeschlossen." + (imported === undefined ? "" : ` ${imported} neue Schlüssel gespeichert.`) + (decrypted === undefined ? "" : ` ${decrypted} Nachrichten entschlüsselt.`) + (remaining === undefined ? "" : remaining ? ` Für ${remaining} Nachrichten fehlen noch weitere Schlüssel.` : " Für die gespeicherten Nachrichten fehlen keine Schlüssel mehr.");
     byId("key-file").value = "";
-    if (view.selected) await loadHistory(view.selected);
+    try {
+      await refreshState();
+      if (view.selected) await loadHistory(view.selected);
+    } catch {
+      if (generation === view.accountGeneration) resultText.textContent += " Die Ansicht konnte noch nicht aktualisiert werden. Bitte den Chat erneut öffnen.";
+    }
   } catch (error) {
     if (error.staleAccount || generation !== view.accountGeneration) return;
     resultText.textContent = error.message;
   } finally {
-    byId("key-passphrase").value = "";
-    byId("import-keys").disabled = false;
+    finished = true;
+    window.clearInterval(progress);
+    if (generation === view.accountGeneration) {
+      byId("key-passphrase").value = "";
+      byId("key-import-form").removeAttribute("aria-busy");
+      button.disabled = false;
+      button.textContent = "Schlüssel importieren";
+    }
   }
 }
 

@@ -293,6 +293,17 @@ class WebTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(value["details"]["devices"][0]["fingerprint"], "public-fingerprint")
             self.assertNotIn("private-", await response.text())
 
+    async def test_busy_key_import_reports_retry_guidance_without_export_details(self):
+        from bridge.matrix import MatrixActionError
+
+        self.matrix.import_room_keys.side_effect = MatrixActionError("key_import_busy", "private-import-detail")
+        response = await self.client.post("/api/keys/import", data=self.key_upload(), headers=self.headers)
+        self.assertEqual(response.status, 409)
+        value = await response.json()
+        self.assertEqual(value["code"], "key_import_busy")
+        self.assertIn("erneut", value["error"])
+        self.assertNotIn("private-import-detail", await response.text())
+
     async def test_backend_exception_does_not_expose_credentials(self):
         self.matrix.send_room_text.side_effect = RuntimeError("sensitive-token-in-exception")
         response = await self.client.post("/api/rooms/!room/send", json={"text": "Hi", "transaction_id": "id"}, headers=self.headers)

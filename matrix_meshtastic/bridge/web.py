@@ -82,6 +82,7 @@ def _action_response(error):
         "unverified_devices": "Vor dem Senden die Geräte dieses Chats unter Geräte & Schlüssel bestätigen.",
         "encryption_not_ready": "Die Verschlüsselung ist noch nicht bereit. Geräte bestätigen und Raumschlüssel erneut anfordern.",
         "key_import_failed": "Die Schlüsseldatei konnte nicht importiert werden. Datei und Export-Passphrase prüfen.",
+        "key_import_busy": "Die Verschlüsselung verarbeitet gerade eine andere Anfrage. Bitte kurz warten und den Import erneut starten.",
         "fingerprint_mismatch": "Der Fingerabdruck stimmt nicht mehr überein. Das Gerät erneut vergleichen.",
         "confirmation_required": "Den Fingerabdruck zuerst mit dem anderen Gerät vergleichen und ausdrücklich bestätigen.",
         "setup_required": "Bitte zuerst das Matrix-Konto in den Einstellungen verbinden.",
@@ -341,7 +342,7 @@ def create_app(matrix, radio_status: Callable[[], dict], allowed_peers=None, man
             raise web.HTTPBadRequest(reason="Ungültige Export-Passphrase.") from None
         if not data or not passphrase or len(passphrase) > 1024:
             raise web.HTTPBadRequest(reason="Schlüsseldatei und Export-Passphrase eingeben.")
-        return _json(await asyncio.wait_for(matrix.import_room_keys(data, passphrase), 60))
+        return _json(await asyncio.wait_for(matrix.import_room_keys(data, passphrase), 300))
 
     async def index(request):
         return web.FileResponse(STATIC / "index.html")

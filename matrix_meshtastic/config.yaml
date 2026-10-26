@@ -1,5 +1,5 @@
 name: Matrix Meshtastic Bridge
-version: "0.3.0"
+version: "0.3.1"
 slug: matrix_meshtastic
 description: Matrix-Messenger mit Chats, Direktnachrichten und optionaler privater Meshtastic-Bridge.
 arch:

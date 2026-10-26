@@ -96,6 +96,8 @@ Raumteilnehmer müssen dem verwendeten Gerät bei Bedarf die Raum-Schlüssel fre
 3. Die exportierte Datei, beispielsweise `elements-keys.txt`, auswählen und die beim Export gewählte Passphrase eingeben.
 4. **Schlüssel importieren** wählen. Bereits empfangene Nachrichten werden mit den importierten Schlüsseln erneut entschlüsselt, ohne alte Nachrichten ins Funknetz zu übertragen.
 
+Während des Imports zeigt die Oberfläche den laufenden Vorgang an. Große Exporte können einige Minuten dauern. Danach werden die neu gespeicherten Schlüssel, entschlüsselten Nachrichten und noch fehlenden Schlüssel gemeldet. Die Gerätebestätigung ist für den Datei-Import nicht erforderlich. Für den Versand an nicht bestätigte Geräte zeigt der Messenger die konkret betroffenen Geräte zur Bestätigung an; ein Schlüsselimport bestätigt keine Geräteidentitäten.
+
 Unterstützt wird der verschlüsselte Megolm-Sitzungsexport mit bis zu 10 MB. Ein Matrix-Backup-Wiederherstellungsschlüssel ist ein anderes Format. Die Passphrase wird nicht gespeichert. Die temporäre Importdatei wird nach Erfolg oder Fehler entfernt; die importierten Sitzungen bleiben im geschützten lokalen Schlüsselspeicher erhalten.
 
 Die Bridge entschlüsselt Nachrichten zwischen den beiden Systemen. Für die Funkübertragung gilt der private Meshtastic-Schlüssel; die Matrix-Verschlüsselung reicht nicht bis zum Funkgerät.

@@ -1,3 +1,10 @@
+# 0.3.1
+
+- Sichtbarer Importfortschritt und verständliches Ergebnis mit Schlüssel- und Nachrichtenzahlen.
+- Schlüsselimport mit UTF-8-Passphrasen und großen Element-Exporten verbessert.
+- Beendete Gerätebestätigungen verdecken die Geräteverwaltung nicht mehr.
+- Bei blockiertem Versand werden die dafür zu bestätigenden Geräte hervorgehoben.
+
 # 0.3.0
 
 - Einrichtung und Verwaltung von Matrix, Meshtastic und Weiterleitung direkt in Ingress.

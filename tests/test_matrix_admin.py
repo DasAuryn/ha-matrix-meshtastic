@@ -1,6 +1,8 @@
+import asyncio
 import json
 import stat
 import tempfile
+import threading
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
@@ -123,15 +125,15 @@ class MatrixAdminTests(unittest.IsolatedAsyncioTestCase):
             await source.client.export_keys(str(export_path), "export-passphrase", count=1000)
             data = export_path.read_bytes()
             self.assertIn(b"BEGIN MEGOLM SESSION DATA", data)
-            original_import = self.receiver.client.import_keys
+            original_import = self.receiver.client.olm.import_keys_static
             temporary_paths = []
 
-            async def inspect_import(path, passphrase):
+            def inspect_import(path, passphrase):
                 temporary_paths.append(Path(path))
                 self.assertEqual(stat.S_IMODE(Path(path).stat().st_mode), 0o600)
-                await original_import(path, passphrase)
+                return original_import(path, passphrase)
 
-            with patch.object(self.receiver.client, "import_keys", side_effect=inspect_import):
+            with patch.object(self.receiver.client.olm, "import_keys_static", side_effect=inspect_import):
                 result = await self.receiver.import_room_keys(data, "export-passphrase")
             self.assertEqual(result["imported_keys"], 1)
             self.assertEqual(result["decrypted_messages"], 1)
@@ -165,6 +167,123 @@ class MatrixAdminTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(list(self.receiver.data_dir.glob(".room-keys-*")), [])
         finally:
             await source.close()
+
+    def encrypted_export(self, count=1, passphrase="export-passphrase"):
+        keys = self.receiver.client.olm.account.identity_keys
+        sessions = [InboundGroupSession(OutboundGroupSession().session_key, keys["ed25519"], keys["curve25519"], self.room.room_id) for _ in range(count)]
+        path = Path(self.directory.name) / "element-keys.txt"
+        path.unlink(missing_ok=True)
+        self.receiver.client.olm.export_keys_static(sessions, str(path), passphrase.encode("utf-8"), count=1000)
+        return path.read_bytes(), sessions
+
+    async def test_element_export_with_unicode_passphrase_uses_utf8(self):
+        await self._real_crypto_client(self.receiver, "TARGET")
+        for passphrase in ("Prüfung-äöü", "Schlüssel-🔐"):
+            with self.subTest(passphrase=passphrase):
+                data, sessions = self.encrypted_export(passphrase=passphrase)
+                result = await self.receiver.import_room_keys(data, passphrase)
+                self.assertEqual(result["imported_keys"], 1)
+                self.assertIsNotNone(self.receiver.client.olm.inbound_group_store.get(self.room.room_id, sessions[0].sender_key, sessions[0].id))
+
+    async def test_large_import_commits_batches_and_keeps_event_loop_responsive(self):
+        await self._real_crypto_client(self.receiver, "TARGET")
+        data, sessions = self.encrypted_export(count=150)
+        client = self.receiver.client
+        commits = []
+        writes_in_transaction = []
+        original_save = client.store.save_inbound_group_session
+        observed_sizes = set()
+        finished = asyncio.Event()
+
+        def inspect_save(session):
+            writes_in_transaction.append(client.store.database.in_transaction())
+            return original_save(session)
+
+        async def observe():
+            while not finished.is_set():
+                observed_sizes.add(len(list(client.olm.inbound_group_store)))
+                await asyncio.sleep(0)
+
+        client.store.database.connection().set_trace_callback(lambda sql: commits.append(sql) if sql == "COMMIT" else None)
+        observer = asyncio.create_task(observe())
+        try:
+            with patch.object(client.store, "save_inbound_group_session", side_effect=inspect_save):
+                result = await self.receiver.import_room_keys(data, "export-passphrase")
+        finally:
+            finished.set()
+            await observer
+            client.store.database.connection().set_trace_callback(None)
+        self.assertEqual(result["imported_keys"], 150)
+        self.assertEqual(len(commits), 3)
+        self.assertTrue(all(writes_in_transaction))
+        self.assertTrue({50, 100}.issubset(observed_sizes))
+        self.assertEqual(len(list(client.store.load_inbound_group_sessions())), len(sessions))
+
+    async def test_failed_batch_rolls_back_database_without_publishing_memory_keys(self):
+        await self._real_crypto_client(self.receiver, "TARGET")
+        data, sessions = self.encrypted_export(count=2)
+        client = self.receiver.client
+        original_save = client.store.save_inbound_group_session
+        calls = 0
+
+        def fail_second_save(session):
+            nonlocal calls
+            calls += 1
+            if calls == 2:
+                raise OSError("storage unavailable")
+            return original_save(session)
+
+        with patch.object(client.store, "save_inbound_group_session", side_effect=fail_second_save):
+            with self.assertRaises(OSError):
+                await self.receiver.import_room_keys(data, "export-passphrase")
+        self.assertEqual(list(client.olm.inbound_group_store), [])
+        self.assertEqual(list(client.store.load_inbound_group_sessions()), [])
+        self.assertFalse(self.receiver._key_retry_lock.locked())
+        self.assertFalse(self.receiver._key_import_lock.locked())
+        self.assertEqual(list(self.receiver.data_dir.glob(".room-keys-*")), [])
+
+    async def test_cancelled_decode_cleans_up_in_worker_without_importing_keys(self):
+        await self._real_crypto_client(self.receiver, "TARGET")
+        data, sessions = self.encrypted_export()
+        client = self.receiver.client
+        original_import = client.olm.import_keys_static
+        started = threading.Event()
+        release = threading.Event()
+        paths = []
+
+        def delayed_decode(path, passphrase):
+            paths.append(Path(path))
+            started.set()
+            if not release.wait(5):
+                raise RuntimeError("worker was not released")
+            return original_import(path, passphrase)
+
+        with patch.object(client.olm, "import_keys_static", side_effect=delayed_decode):
+            task = asyncio.create_task(self.receiver.import_room_keys(data, "export-passphrase"))
+            try:
+                self.assertTrue(await asyncio.to_thread(started.wait, 5))
+                task.cancel()
+                with self.assertRaises(asyncio.CancelledError):
+                    await task
+                self.assertTrue(paths[0].exists())
+            finally:
+                release.set()
+            for _ in range(100):
+                if not paths[0].exists():
+                    break
+                await asyncio.sleep(0.01)
+        self.assertFalse(paths[0].exists())
+        self.assertEqual(list(client.olm.inbound_group_store), [])
+        self.assertEqual(list(client.store.load_inbound_group_sessions()), [])
+
+    async def test_second_import_reports_busy_without_starting_another_decode(self):
+        await self._real_crypto_client(self.receiver, "TARGET")
+        async with self.receiver._key_import_lock:
+            with patch.object(self.receiver.client.olm, "import_keys_static") as decode:
+                with self.assertRaises(MatrixActionError) as raised:
+                    await self.receiver.import_room_keys(b"encrypted-export", "export-passphrase")
+        self.assertEqual(raised.exception.code, "key_import_busy")
+        decode.assert_not_called()
 
     async def test_manual_fingerprint_verification_requires_explicit_confirmation_and_current_key(self):
         await self._real_crypto_client(self.receiver, "TARGET")
