@@ -46,7 +46,7 @@ class WebTests(unittest.IsolatedAsyncioTestCase):
             get_settings=Mock(return_value={
                 "configured": False, "config_valid": False, "setup_required": True,
                 "validation_error": "Matrix-Benutzer fehlt.",
-                "matrix": {"homeserver": "https://matrix.example.invalid", "user_id": "", "password": "private-password", "access_token": "private-token", "has_password": True, "has_access_token": True},
+                "matrix": {"homeserver": "https://matrix.example.invalid", "user_id": "", "password": "private-password", "access_token": "private-token", "require_verified_devices": False, "has_password": True, "has_access_token": True},
                 "meshtastic": {"enabled": False, "channel_psk": "private-channel-key", "mqtt_password": "private-mqtt-password", "has_channel_psk": True},
                 "forwarding": {"include_sender": True},
             }),
@@ -105,6 +105,23 @@ class WebTests(unittest.IsolatedAsyncioTestCase):
         client = await self.management_client()
         response = await client.get("/api/devices/discover")
         self.assertEqual(await response.json(), {"serial": [{"path": "/dev/serial/by-id/radio", "label": "Radio"}]})
+
+    async def test_optional_device_verification_policy_round_trips_both_boolean_values(self):
+        client = await self.management_client()
+        for required in (False, True, False):
+            with self.subTest(required=required):
+                self.management.get_settings.return_value["matrix"]["require_verified_devices"] = required
+                response = await client.get("/api/settings")
+                self.assertIs((await response.json())["matrix"]["require_verified_devices"], required)
+                payload = {"matrix": {"require_verified_devices": required}}
+                self.management.save_settings.return_value = {"matrix": {"require_verified_devices": required}}
+                response = await client.post("/api/settings", json=payload, headers=self.headers)
+                self.assertEqual(response.status, 200)
+                self.management.save_settings.assert_awaited_with(payload)
+                self.assertIs((await response.json())["matrix"]["require_verified_devices"], required)
+                self.matrix.messenger_state.return_value["require_verified_devices"] = required
+                response = await self.client.get("/api/state")
+                self.assertIs((await response.json())["require_verified_devices"], required)
 
     async def test_account_binding_is_public_for_browser_cache_isolation(self):
         self.matrix.messenger_state.return_value["account_id"] = "public-account-binding"
@@ -231,6 +248,23 @@ class WebTests(unittest.IsolatedAsyncioTestCase):
             self.matrix.verification_action.assert_awaited_with("verify-1", action)
         response = await self.client.post("/api/verification/verify-1", json={"action": "trust-everyone"}, headers=self.headers)
         self.assertEqual(response.status, 400)
+
+    async def test_modern_verification_progress_exposes_comparison_without_private_session_data(self):
+        for state in ("requested", "accepted", "emoji", "confirmed", "done", "cancelled"):
+            with self.subTest(state=state):
+                self.matrix.messenger_state.return_value["verification"] = [{
+                    "transaction_id": "modern-request", "user_id": "@alice:example.invalid",
+                    "device_id": "ALICE", "state": state,
+                    "emoji": [{"emoji": "🐶", "description": "Hund", "key": "private-sas-key"}] if state == "emoji" else [],
+                    "secret": "private-session-data",
+                }]
+                response = await self.client.get("/api/state")
+                self.assertEqual(response.status, 200)
+                verification = (await response.json())["verification"][0]
+                self.assertEqual(verification["state"], state)
+                self.assertEqual(verification["transaction_id"], "modern-request")
+                self.assertEqual(verification["emoji"], [{"emoji": "🐶", "description": "Hund"}] if state == "emoji" else [])
+                self.assertNotIn("private-", await response.text())
 
     async def test_fingerprint_verification_requires_explicit_comparison(self):
         value = {"user_id": "@alice:example.invalid", "device_id": "ALICE", "fingerprint": "public-fingerprint"}

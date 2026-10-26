@@ -541,13 +541,13 @@ function renderVerification() {
   if (!verification) {
     const deviceKey = device => JSON.stringify([device.user_id, device.device_id]);
     const isCurrent = device => device.own_device || device.device_id === view.state.device_id && device.user_id === view.state.user_id;
-    const targets = view.verificationTargetRoom === view.selected ? view.verificationTargets : [];
+    const targets = view.verificationTargetRoom === view.selected && view.state.require_verified_devices !== false ? view.verificationTargets : [];
     const targetKeys = new Set(targets.map(deviceKey));
     const allDevices = new Map(targets.map(device => [deviceKey(device), {...device}]));
     for (const device of view.state.devices || []) allDevices.set(deviceKey(device), {...allDevices.get(deviceKey(device)), ...device});
     const needsConfirmation = device => targetKeys.has(deviceKey(device)) && !device.verified && !isCurrent(device);
     const required = [...allDevices.values()].filter(needsConfirmation);
-    byId("verification-description").textContent = [view.verificationNotice, required.length ? "Für den Versand in diesem Chat die markierten Geräte bestätigen. Ein Schlüsselimport bestätigt keine Geräte." : "", "Bestätige Geräte, um verschlüsselte Chats zu verwenden. Die Bestätigung muss auf beiden Geräten übereinstimmen. Dieses Gerät: " + (view.state.device_id || "noch nicht verbunden") + "."].filter(Boolean).join(" ");
+    byId("verification-description").textContent = [view.verificationNotice, required.length ? "Die zusätzliche Geräteprüfung ist aktiviert. Für den Versand in diesem Chat die markierten Geräte bestätigen oder die Prüfung in den Matrix-Einstellungen ausschalten. Ein Schlüsselimport bestätigt keine Geräte." : "Die Gerätebestätigung ist eine zusätzliche, optionale Prüfung. Verschlüsselte Chats funktionieren auch ohne sie.", "Vergleiche zur Bestätigung die Symbole oder den Fingerabdruck auf beiden Geräten. Dieses Gerät: " + (view.state.device_id || "noch nicht verbunden") + "."].filter(Boolean).join(" ");
     for (const device of [...allDevices.values()].sort((left, right) => Number(needsConfirmation(right)) - Number(needsConfirmation(left)))) {
       const row = element("div", "device-row");
       const copy = element("div", "device-copy");
@@ -555,7 +555,7 @@ function renderVerification() {
       if (needsConfirmation(device)) copy.append(element("strong", "", "Für Versand bestätigen"));
       row.append(copy);
       if (isCurrent(device)) row.append(element("span", "verified-label", "Dieses Gerät"));
-      else if (device.verified) row.append(element("span", "verified-label", "Bestätigt"));
+      else if (device.verified) row.append(element("span", "verified-label", "Hier bestätigt"));
       else {
         const actions = element("div", "device-actions");
         const button = element("button", "quiet-button", "Symbole vergleichen");
@@ -581,8 +581,9 @@ function renderVerification() {
   const state = verification.state || "requested";
   const complete = ["done", "verified"].includes(state);
   const cancelled = ["cancelled", "canceled", "failed"].includes(state);
-  const canCompare = values.length > 0 && !complete && !cancelled;
-  byId("verification-description").textContent = complete ? "Die Gerätebestätigung ist abgeschlossen." : cancelled ? "Die Gerätebestätigung wurde beendet. Du kannst eine neue Bestätigung starten." : state === "confirmed" ? "Du hast die Symbole bestätigt. Warte auf die Bestätigung des anderen Geräts." : canCompare ? "Vergleiche diese Symbole mit dem anderen Gerät. Bestätige nur, wenn alle Symbole in derselben Reihenfolge übereinstimmen." : `${verification.user_id || "Matrix"} · ${verification.device_id || ""}. ` + (["requested", "request", "started", "start", "incoming"].includes(state) ? "Nimm die Anfrage an und vergleiche anschließend die Symbole auf beiden Geräten." : "Warte auf das andere Gerät. Dort die Gerätebestätigung öffnen.");
+  const canCompare = values.length > 0 && !complete && !cancelled && state !== "confirmed";
+  const canAccept = ["requested", "request", "started", "start", "incoming"].includes(state);
+  byId("verification-description").textContent = complete ? "Die Gerätebestätigung ist abgeschlossen." : cancelled ? "Die Gerätebestätigung wurde beendet. Du kannst eine neue Bestätigung starten." : state === "confirmed" ? "Du hast die Symbole bestätigt. Warte auf die Bestätigung des anderen Geräts." : canCompare ? "Vergleiche diese Symbole mit dem anderen Gerät. Bestätige nur, wenn alle Symbole in derselben Reihenfolge übereinstimmen." : `${verification.user_id || "Matrix"} · ${verification.device_id || ""}. ` + (canAccept ? "Nimm die Anfrage an und vergleiche anschließend die Symbole auf beiden Geräten." : "Warte auf das andere Gerät. Dort die Gerätebestätigung öffnen.");
   for (const item of values) {
     const symbol = Array.isArray(item) ? item[0] : item.emoji || item.symbol || "";
     const description = Array.isArray(item) ? item[1] : item.description || item.name || "";
@@ -590,9 +591,9 @@ function renderVerification() {
     tile.append(element("span", "", symbol), element("small", "", description));
     emoji.append(tile);
   }
-  confirm.textContent = canCompare ? "Symbole stimmen überein" : "Anfrage annehmen";
+  confirm.textContent = canCompare ? "Symbole stimmen überein" : canAccept ? "Anfrage annehmen" : state === "confirmed" ? "Warte auf Gegenbestätigung …" : "Warte auf Vergleichssymbole …";
   confirm.dataset.action = canCompare ? "confirm" : "accept";
-  confirm.disabled = !view.state.connected || complete || cancelled || state === "confirmed" || !canCompare && !["requested", "request", "started", "start", "incoming"].includes(state);
+  confirm.disabled = !view.state.connected || complete || cancelled || state === "confirmed" || !canCompare && !canAccept;
   cancel.textContent = complete || cancelled ? "Schließen" : "Abbrechen";
   cancel.dataset.action = complete || cancelled ? "close" : "cancel";
 }
@@ -644,7 +645,7 @@ async function verificationAction(action) {
 }
 
 const settingInputs = {
-  matrix: {homeserver: "homeserver", user_id: "user-id", password: "password", access_token: "access-token", device_id: "device-id", room_id: "room-id"},
+  matrix: {homeserver: "homeserver", user_id: "user-id", password: "password", access_token: "access-token", device_id: "device-id", room_id: "room-id", require_verified_devices: "require-verified-devices"},
   meshtastic: {enabled: "enabled", connection: "connection", channel_index: "channel-index", channel_psk: "channel-psk", tcp_host: "tcp-host", tcp_port: "tcp-port", serial_device: "serial-device", ble_address: "ble-address", mqtt_host: "mqtt-host", mqtt_port: "mqtt-port", mqtt_username: "mqtt-username", mqtt_password: "mqtt-password", mqtt_tls: "mqtt-tls", mqtt_topic: "mqtt-topic", mqtt_channel_name: "mqtt-channel-name", mqtt_gateway_id: "mqtt-gateway-id"},
   forwarding: {include_sender: "include-sender", max_message_age_seconds: "max-age", message_interval_seconds: "message-interval", long_message: "long-message", max_parts: "max-parts"}
 };
@@ -695,7 +696,7 @@ function populateBridgeRooms(value) {
 function fillSettings(value) {
   view.settings = value;
   const defaults = {
-    matrix: {homeserver: "https://matrix.org", user_id: "", device_id: "", room_id: ""},
+    matrix: {homeserver: "https://matrix.org", user_id: "", device_id: "", room_id: "", require_verified_devices: false},
     meshtastic: {enabled: false, connection: "tcp", channel_index: 0, tcp_host: "", tcp_port: 4403, serial_device: "", ble_address: "", mqtt_host: "", mqtt_port: 1883, mqtt_username: "", mqtt_tls: false, mqtt_topic: "msh/EU_868/2/e", mqtt_channel_name: "", mqtt_gateway_id: ""},
     forwarding: {include_sender: true, max_message_age_seconds: 300, message_interval_seconds: 5, long_message: "split", max_parts: 4}
   };
@@ -743,7 +744,7 @@ function renderManagementStatus() {
   byId("open-rooms").disabled = !view.state.connected;
   byId("settings-security").disabled = !view.state.connected;
   show(byId("logout-account"), view.settings?.configured === true);
-  const status = view.state.connected ? "Verbunden. Deine Chats werden automatisch abgeglichen. Verschlüsselte Chats bei Bedarf unter Geräte & Schlüssel bestätigen." : view.state.error || view.settings?.validation_error || "Speichere die Anmeldung. Danach werden deine Chats automatisch synchronisiert.";
+  const status = view.state.connected ? "Verbunden. Deine Chats werden automatisch abgeglichen. Geräte können unter Geräte & Schlüssel zusätzlich bestätigt werden." : view.state.error || view.settings?.validation_error || "Speichere die Anmeldung. Danach werden deine Chats automatisch synchronisiert.";
   byId("setup-progress").textContent = status;
 }
 
@@ -968,7 +969,7 @@ async function importKeys(event) {
     const remaining = result.pending_encrypted_count ?? result.remaining ?? view.state.diagnostics?.pending_encrypted_count;
     const imported = result.imported_keys;
     const decrypted = result.decrypted_messages;
-    resultText.textContent = "Import abgeschlossen." + (imported === undefined ? "" : ` ${imported} neue Schlüssel gespeichert.`) + (decrypted === undefined ? "" : ` ${decrypted} Nachrichten entschlüsselt.`) + (remaining === undefined ? "" : remaining ? ` Für ${remaining} Nachrichten fehlen noch weitere Schlüssel.` : " Für die gespeicherten Nachrichten fehlen keine Schlüssel mehr.");
+    resultText.textContent = "Import abgeschlossen." + (imported === undefined ? "" : ` ${imported} zusätzliche Schlüssel gespeichert.`) + (decrypted === undefined ? "" : ` ${decrypted} Nachrichten entschlüsselt.`) + (remaining === undefined ? "" : remaining ? ` Für ${remaining} Nachrichten fehlen noch weitere Schlüssel.` : " Für die gespeicherten Nachrichten fehlen keine Schlüssel mehr.");
     byId("key-file").value = "";
     try {
       await refreshState();

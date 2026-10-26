@@ -1,5 +1,5 @@
 name: Matrix Meshtastic Bridge
-version: "0.3.1"
+version: "0.3.2"
 slug: matrix_meshtastic
 description: Matrix-Messenger mit Chats, Direktnachrichten und optionaler privater Meshtastic-Bridge.
 arch:
@@ -25,6 +25,7 @@ options:
     access_token: ""
     device_id: ""
     room_id: ""
+    require_verified_devices: false
   meshtastic:
     enabled: false
     connection: tcp
@@ -56,6 +57,7 @@ schema:
     access_token: password
     device_id: str
     room_id: str
+    require_verified_devices: bool
   meshtastic:
     enabled: bool
     connection: list(usb|tcp|bluetooth|mqtt)

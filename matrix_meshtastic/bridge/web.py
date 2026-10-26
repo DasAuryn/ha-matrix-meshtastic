@@ -34,7 +34,7 @@ async def _await(value):
 
 def _safe_settings(snapshot):
     groups = {
-        "matrix": ("homeserver", "user_id", "room_id", "device_id", "has_password", "has_access_token"),
+        "matrix": ("homeserver", "user_id", "room_id", "device_id", "require_verified_devices", "has_password", "has_access_token"),
         "meshtastic": ("enabled", "connection", "channel_index", "tcp_host", "tcp_port", "serial_device", "ble_address", "mqtt_host", "mqtt_port", "mqtt_username", "mqtt_tls", "mqtt_topic", "mqtt_gateway_id", "mqtt_channel_name", "has_channel_psk", "has_mqtt_password"),
         "forwarding": ("include_sender", "max_message_age_seconds", "message_interval_seconds", "long_message", "max_parts"),
     }
@@ -46,7 +46,7 @@ def _safe_settings(snapshot):
 
 
 def _public_state(snapshot):
-    value = {key: snapshot[key] for key in ("connected", "user_id", "device_id", "account_id", "error", "bridge_error", "configured", "config_valid", "setup_required") if key in snapshot}
+    value = {key: snapshot[key] for key in ("connected", "user_id", "device_id", "account_id", "require_verified_devices", "error", "bridge_error", "configured", "config_valid", "setup_required") if key in snapshot}
     collections = {
         "rooms": ("room_id", "name", "encrypted", "membership", "is_direct", "unread_count", "last_message_ts", "last_message"),
         "devices": ("user_id", "device_id", "display_name", "fingerprint", "verified", "own_device"),
@@ -79,8 +79,8 @@ def _action_response(error):
         return None
 
     messages = {
-        "unverified_devices": "Vor dem Senden die Geräte dieses Chats unter Geräte & Schlüssel bestätigen.",
-        "encryption_not_ready": "Die Verschlüsselung ist noch nicht bereit. Geräte bestätigen und Raumschlüssel erneut anfordern.",
+        "unverified_devices": "Die zusätzliche Geräteprüfung ist aktiviert. Die Geräte dieses Chats unter Geräte & Schlüssel bestätigen oder die Prüfung in den Matrix-Einstellungen ausschalten.",
+        "encryption_not_ready": "Die Verschlüsselung ist noch nicht bereit. Bitte kurz warten und erneut senden. Fehlende Raumschlüssel können unter Geräte & Schlüssel erneut angefordert werden.",
         "key_import_failed": "Die Schlüsseldatei konnte nicht importiert werden. Datei und Export-Passphrase prüfen.",
         "key_import_busy": "Die Verschlüsselung verarbeitet gerade eine andere Anfrage. Bitte kurz warten und den Import erneut starten.",
         "fingerprint_mismatch": "Der Fingerabdruck stimmt nicht mehr überein. Das Gerät erneut vergleichen.",

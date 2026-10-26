@@ -275,6 +275,7 @@ class MatrixTests(unittest.IsolatedAsyncioTestCase):
             "m.room.message",
             {"msgtype": "m.text", "body": "Incoming mesh"},
             tx_id="mesh-123",
+            ignore_unverified_devices=True,
         )
 
     async def test_sync_cursor_is_committed_after_batch(self):

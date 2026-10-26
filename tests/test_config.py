@@ -62,6 +62,20 @@ def test_radio_security_error_does_not_invalidate_matrix_configuration(tmp_path,
         settings.validate_radio()
 
 
+def test_matrix_strict_device_verification_is_optional(tmp_path, valid_options):
+    settings = load_options(tmp_path, valid_options)
+    assert settings.matrix.require_verified_devices is False
+    valid_options["matrix"]["require_verified_devices"] = True
+    assert load_options(tmp_path, valid_options).matrix.require_verified_devices is True
+
+
+@pytest.mark.parametrize("strict", ["false", "true", 0, 1, None])
+def test_matrix_strict_verification_requires_boolean(tmp_path, valid_options, strict):
+    valid_options["matrix"]["require_verified_devices"] = strict
+    with pytest.raises(ValueError):
+        load_options(tmp_path, valid_options)
+
+
 @pytest.mark.parametrize("enabled", ["false", 1, None])
 def test_radio_enabled_requires_boolean(tmp_path, valid_options, enabled):
     valid_options["meshtastic"]["enabled"] = enabled

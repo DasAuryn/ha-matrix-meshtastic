@@ -21,6 +21,9 @@ configuration:
       room_id:
         name: Raum für Meshtastic
         description: Optionaler Bridge-Raum mit interner !Raum-ID oder #Alias. Für den reinen Matrix-Messenger leer lassen.
+      require_verified_devices:
+        name: Strenge Geräteprüfung vor dem Senden
+        description: Optional den Versand an unbestätigte Geräte blockieren. Die Ende-zu-Ende-Verschlüsselung bleibt auch ohne diese zusätzliche Prüfung aktiv.
   meshtastic:
     name: Meshtastic
     description: Optionale Funkweiterleitung. Matrix-Chats funktionieren auch ohne Funkgerät.

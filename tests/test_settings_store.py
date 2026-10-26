@@ -104,3 +104,15 @@ def test_radio_only_change_keeps_credentials_when_existing_server_has_trailing_s
     raw, settings = store.candidate({"meshtastic": {"channel_index": 2}})
     assert settings.matrix.password == "existing-private-password"
     assert raw["matrix"]["homeserver"] == "https://matrix.org"
+
+
+def test_legacy_ingress_settings_use_normal_encrypted_sending(tmp_path):
+    store = configured_store(tmp_path)
+    store.raw["matrix"].pop("require_verified_devices", None)
+    store.save(store.raw)
+    reopened = SettingsStore(store.options_path, tmp_path)
+    assert reopened.settings().matrix.require_verified_devices is False
+    raw, settings = reopened.candidate({"matrix": {"require_verified_devices": True}})
+    assert settings.matrix.require_verified_devices is True
+    reopened.save(raw)
+    assert SettingsStore(store.options_path, tmp_path).settings().matrix.require_verified_devices is True

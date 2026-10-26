@@ -4,11 +4,12 @@ import stat
 import tempfile
 import threading
 import unittest
+from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock, patch
 
-from nio import ErrorResponse, MatrixRoom, MegolmEvent, RoomMessageText
+from nio import ErrorResponse, MatrixRoom, MegolmEvent, RoomMessageText, RoomSendResponse, ShareGroupSessionResponse, ToDeviceEvent
 from nio.crypto import InboundGroupSession
 from nio.crypto.device import OlmDevice
 from nio.crypto.sessions import OutboundGroupSession
@@ -96,6 +97,108 @@ class MatrixAdminTests(unittest.IsolatedAsyncioTestCase):
         receiver.client.restore_login(receiver.settings.user_id, device_id, "test-token")
         receiver.ready.set()
         receiver.client.rooms[self.room.room_id] = MatrixRoom(self.room.room_id, receiver.settings.user_id, encrypted=True)
+
+    async def encrypted_peer(self):
+        await self._real_crypto_client(self.receiver, "TARGET")
+        peer = MatrixReceiver(replace(self.receiver.settings, user_id="@alice:example.invalid"), Path(self.directory.name) / "peer")
+        self.addAsyncCleanup(peer.close)
+        await self._real_crypto_client(peer, "ALICE")
+        for local, remote in ((self.receiver, peer), (peer, self.receiver)):
+            room = local.client.rooms[self.room.room_id]
+            room.add_member(local.settings.user_id, None, None)
+            room.add_member(remote.settings.user_id, None, None)
+            room.members_synced = True
+            device = OlmDevice(remote.settings.user_id, remote.client.device_id, dict(remote.client.olm.account.identity_keys))
+            local.client.device_store.add(device)
+            local.client.store.save_device_keys({device.user_id: {device.id: device}})
+        account = peer.client.olm.account
+        account.generate_one_time_keys(1)
+        self.receiver.client.olm.create_session(next(iter(account.one_time_keys["curve25519"].values())), account.identity_keys["curve25519"])
+        events = []
+        key_recipients = []
+
+        async def network(response_class, method, path, data, response_data=None):
+            payload = json.loads(data)
+            if response_class is ShareGroupSessionResponse:
+                for user_id, devices in payload["messages"].items():
+                    for device_id, content in devices.items():
+                        key_recipients.append((user_id, device_id))
+                        self.assertEqual((user_id, device_id), (peer.settings.user_id, peer.client.device_id))
+                        incoming = ToDeviceEvent.parse_event({"type": "m.room.encrypted", "sender": self.receiver.settings.user_id, "content": content})
+                        self.assertIsNotNone(peer.client.olm.handle_to_device_event(incoming))
+                response = response_class.from_dict({}, *response_data)
+            elif response_class is RoomSendResponse:
+                self.assertIn("/m.room.encrypted/", path)
+                self.assertNotIn("body", payload)
+                event_id = f"$sent-{len(events)}"
+                events.append(MegolmEvent.from_dict({
+                    "type": "m.room.encrypted", "event_id": event_id,
+                    "sender": self.receiver.settings.user_id, "origin_server_ts": 123456,
+                    "room_id": self.room.room_id, "content": payload,
+                }))
+                response = response_class.from_dict({"event_id": event_id}, *response_data)
+            else:
+                self.fail(f"Unexpected network operation {response_class.__name__}")
+            await self.receiver.client.receive_response(response)
+            return response
+
+        self.receiver.client._send = AsyncMock(side_effect=network)
+        return peer, events, key_recipients
+
+    async def test_default_sends_real_encrypted_messages_to_unverified_devices_without_verifying(self):
+        peer, events, key_recipients = await self.encrypted_peer()
+        device = self.receiver.client.device_store[peer.settings.user_id][peer.client.device_id]
+        await self.receiver.send_room_text(self.room.room_id, "Private Nachricht", "ui-message")
+        await self.receiver.send_text("Nachricht vom Mesh", "mesh-message")
+        self.assertEqual([peer.client.decrypt_event(event).body for event in events], ["Private Nachricht", "Nachricht vom Mesh"])
+        self.assertEqual(key_recipients, [(peer.settings.user_id, peer.client.device_id)])
+        self.assertFalse(device.verified)
+        self.assertTrue(device.ignored)
+        persisted = self.receiver.client.store.load_device_keys()[device.user_id][device.id]
+        self.assertTrue(persisted.ignored)
+        self.assertFalse(persisted.verified)
+        self.assertFalse(self.receiver.messenger_state()["devices"][0]["verified"])
+        self.assertEqual(self.receiver.encryption_diagnostics()["unverified_device_count"], 1)
+
+    async def test_strict_mode_revokes_persisted_ignored_trust_and_rotates_shared_session(self):
+        peer, events, key_recipients = await self.encrypted_peer()
+        await self.receiver.send_room_text(self.room.room_id, "Vorher", "first")
+        device = self.receiver.client.device_store[peer.settings.user_id][peer.client.device_id]
+        shared_session = self.receiver.client.olm.outbound_group_sessions[self.room.room_id]
+        self.assertTrue(shared_session.shared)
+        self.receiver.settings = replace(self.receiver.settings, require_verified_devices=True)
+        self.receiver.client._send.reset_mock()
+        for send in (self.receiver.send_room_text(self.room.room_id, "Streng", "strict-ui"), self.receiver.send_text("Streng", "strict-mesh")):
+            with self.assertRaises(MatrixActionError) as raised:
+                await send
+            self.assertEqual(raised.exception.code, "unverified_devices")
+            self.assertEqual(raised.exception.details["devices"][0]["device_id"], peer.client.device_id)
+        self.receiver.client._send.assert_not_awaited()
+        self.assertEqual(len(events), 1)
+        self.assertEqual(len(key_recipients), 1)
+        self.assertFalse(device.ignored)
+        self.assertFalse(device.verified)
+        self.assertFalse(self.receiver.client.store.load_device_keys()[device.user_id][device.id].ignored)
+        self.assertIsNot(self.receiver.client.olm.outbound_group_sessions[self.room.room_id], shared_session)
+
+    async def test_default_never_shares_keys_with_blacklisted_devices(self):
+        peer, events, key_recipients = await self.encrypted_peer()
+        device = self.receiver.client.device_store[peer.settings.user_id][peer.client.device_id]
+        self.receiver.client.blacklist_device(device)
+        await self.receiver.send_room_text(self.room.room_id, "Gespeichert gesperrt", "blocked")
+        self.assertEqual(key_recipients, [])
+        self.assertTrue(device.blacklisted)
+        self.assertFalse(device.ignored)
+        self.assertFalse(device.verified)
+        with self.assertRaises(EncryptionError):
+            peer.client.decrypt_event(events[0])
+
+    async def test_encrypted_room_without_crypto_never_sends_plaintext(self):
+        self.receiver.client.room_send = AsyncMock()
+        with self.assertRaises(MatrixActionError) as raised:
+            await self.receiver.send_room_text(self.room.room_id, "Private Nachricht", "no-crypto")
+        self.assertEqual(raised.exception.code, "encryption_not_ready")
+        self.receiver.client.room_send.assert_not_awaited()
 
     async def test_real_encrypted_export_import_decrypts_history_without_radio_replay(self):
         source = MatrixReceiver(self.receiver.settings, Path(self.directory.name) / "source")
@@ -300,6 +403,7 @@ class MatrixAdminTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(device.verified)
 
     async def test_unverified_devices_have_actionable_send_error_without_bypassing_encryption(self):
+        self.receiver.settings = replace(self.receiver.settings, require_verified_devices=True)
         await self._real_crypto_client(self.receiver, "TARGET")
         device = OlmDevice("@alice:example.invalid", "ALICE", {"ed25519": "expected-public-key", "curve25519": "curve-public-key"})
         self.receiver.client.device_store.add(device)

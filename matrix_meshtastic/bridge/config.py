@@ -15,6 +15,7 @@ class MatrixSettings:
     access_token: str = field(default="", repr=False)
     device_id: str = ""
     room_id: str = ""
+    require_verified_devices: bool = False
 
 
 @dataclass(frozen=True)
@@ -75,8 +76,10 @@ class Settings:
 
     def validate(self) -> None:
         matrix = self.matrix
-        if not all(isinstance(value, str) for value in vars(matrix).values()):
+        if not all(isinstance(value, str) for name, value in vars(matrix).items() if name != "require_verified_devices"):
             raise ValueError("Die Matrix-Einstellungen müssen Zeichenketten sein.")
+        if not isinstance(matrix.require_verified_devices, bool):
+            raise ValueError("Die strenge Geräteprüfung muss ein Wahrheitswert sein.")
         server = urlparse(matrix.homeserver)
         if server.scheme not in ("http", "https") or not server.hostname or server.username or server.password:
             raise ValueError("Matrix benötigt eine Server-URL ohne Zugangsdaten.")

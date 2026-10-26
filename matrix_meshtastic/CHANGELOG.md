@@ -1,3 +1,13 @@
+# 0.3.2
+
+- Verschlüsselter Matrix-Versand ist standardmäßig ohne verpflichtende manuelle Gerätebestätigung möglich.
+- Eine strenge Geräteprüfung kann bei Bedarf in den Matrix-Einstellungen aktiviert werden.
+- Aktuelle Element-Verifizierungsanfragen können im Ingress angenommen und mit Symbolvergleich abgeschlossen werden.
+- Der Symbolvergleich verwendet passende MAC-Verhandlung, Schlüsselbindung und identische Emojis für aktuelle Matrix-Clients.
+- Die Oberfläche unterscheidet lokale Fingerabdruckfreigaben von der Bestätigung der sendenden Sitzung in Element.
+- Unbestätigte Geräte werden weiterhin nicht als verifiziert dargestellt; gesperrte Geräte bleiben gesperrt.
+- Die Pflicht zu einem privaten AES-Schlüssel für Meshtastic bleibt bestehen.
+
 # 0.3.1
 
 - Sichtbarer Importfortschritt und verständliches Ergebnis mit Schlüssel- und Nachrichtenzahlen.

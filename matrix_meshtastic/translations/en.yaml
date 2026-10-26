@@ -21,6 +21,9 @@ configuration:
       room_id:
         name: Room for Meshtastic
         description: Optional bridge room with an internal !room ID or #alias. Leave empty for the standalone Matrix messenger.
+      require_verified_devices:
+        name: Strict device verification before sending
+        description: Optionally block sending to unverified devices. End-to-end encryption remains enabled without this additional check.
   meshtastic:
     name: Meshtastic
     description: Optional radio forwarding. Matrix chats also work without a radio.

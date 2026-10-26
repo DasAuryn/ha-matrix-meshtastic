@@ -34,6 +34,7 @@ from nio.responses import EmptyResponse
 
 from .config import MatrixSettings
 from .chat_store import ChatStore
+from .verification import VerificationClient
 
 LOGGER = logging.getLogger(__name__)
 TEXT_EVENTS = (RoomMessageText, RoomMessageNotice, RoomMessageEmote)
@@ -120,7 +121,7 @@ class MatrixReceiver:
         if pickle_key is None:
             pickle_key = secrets.token_urlsafe(48)
             _write_private(key_path, pickle_key)
-        client = AsyncClient(
+        client = VerificationClient(
             self.settings.homeserver,
             self.settings.user_id,
             device_id=device_id,
@@ -535,12 +536,16 @@ class MatrixReceiver:
                     "transaction_id": transaction_id, "user_id": sas.other_olm_device.user_id,
                     "device_id": sas.other_olm_device.id, "state": state, "emoji": emoji,
                 })
+            manager = getattr(client, "verification_manager", None)
+            if manager is not None:
+                verifications.extend(manager.snapshot())
         return {
             "connected": self.ready.is_set(), "user_id": self.settings.user_id,
             "device_id": getattr(client, "device_id", self.settings.device_id) or "",
             "rooms": [room for room in self.chat_store.snapshot_rooms() if room["membership"] != "leave"],
             "verification": verifications, "devices": devices, "error": self.error,
             "bridge_error": self.bridge_error,
+            "require_verified_devices": self.settings.require_verified_devices,
             "diagnostics": self.encryption_diagnostics(),
         }
 
@@ -572,7 +577,7 @@ class MatrixReceiver:
         users = getattr(room, "users", None) if room is not None else None
         devices = []
         for device in client.device_store:
-            if device.deleted or device.verified or device.ignored or device.blacklisted:
+            if device.deleted or device.verified or device.blacklisted:
                 continue
             if device.user_id == self.settings.user_id and device.id == client.device_id:
                 continue
@@ -790,8 +795,16 @@ class MatrixReceiver:
 
     async def _send_room_message(self, room_id: str, text: str, transaction_id: str, room: Any = None) -> Any:
         try:
+            require_verified = self.settings.require_verified_devices
+            if getattr(room, "encrypted", False) and not getattr(self.client, "olm", None):
+                raise EncryptionError("Matrix encryption is unavailable")
+            if require_verified and getattr(self.client, "olm", None):
+                for device in self.client.device_store:
+                    if device.ignored and not device.deleted and not device.blacklisted:
+                        self.client.unignore_device(device)
             return self._action_ok(await self.client.room_send(
                 room_id, "m.room.message", {"msgtype": "m.text", "body": text}, tx_id=transaction_id,
+                ignore_unverified_devices=not require_verified,
             ), "Nachrichtenversand")
         except OlmUnverifiedDeviceError as error:
             devices = self._unverified_devices(room)
@@ -920,6 +933,13 @@ class MatrixReceiver:
         client = self._require_ready()
         if not getattr(client, "olm", None):
             raise MatrixSetupError("Die Matrix-Verschlüsselung ist noch nicht bereit.")
+        manager = getattr(client, "verification_manager", None)
+        if manager is not None:
+            try:
+                await manager.start(user_id, device_id)
+            except ValueError as error:
+                raise MatrixSetupError(str(error)) from error
+            return {"verification": self.messenger_state()["verification"]}
         device = client.device_store[user_id].get(device_id)
         if device is None or device.deleted or (user_id == client.user_id and device_id == client.device_id):
             raise MatrixSetupError("Dieses Matrix-Gerät ist nicht verfügbar.")
@@ -928,6 +948,13 @@ class MatrixReceiver:
 
     async def verification_action(self, transaction_id: str, action: str) -> dict:
         client = self._require_ready()
+        manager = getattr(client, "verification_manager", None)
+        if manager is not None and transaction_id in manager.sessions:
+            try:
+                await manager.action(transaction_id, action)
+            except ValueError as error:
+                raise MatrixSetupError(str(error)) from error
+            return {"verification": self.messenger_state()["verification"]}
         sas = client.key_verifications.get(transaction_id)
         if sas is None or sas.canceled or sas.timed_out or sas.verified:
             raise MatrixSetupError("Diese Geräteverifikation ist nicht mehr aktiv.")
