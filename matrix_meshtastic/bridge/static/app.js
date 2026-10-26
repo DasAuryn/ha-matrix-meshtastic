@@ -13,6 +13,11 @@ const view = {
   reads: new Map(),
   loading: new Set(),
   activeVerification: null,
+  settings: null,
+  setupOpened: false,
+  fingerprintDevice: null,
+  managedRoom: null,
+  accountGeneration: 0,
   polling: false
 };
 const timeFormat = new Intl.DateTimeFormat("de-DE", {hour: "2-digit", minute: "2-digit"});
@@ -35,12 +40,17 @@ function errorText(node, message) {
 }
 
 async function api(path, data) {
+  const generation = view.accountGeneration;
   const options = {cache: "no-store", credentials: "same-origin", headers: {Accept: "application/json"}};
+  if (view.state.account_id) options.headers["X-Matrix-Account"] = view.state.account_id;
   if (data !== undefined) {
     options.method = "POST";
-    options.headers["Content-Type"] = "application/json";
     options.headers["X-Matrix-Messenger"] = "1";
-    options.body = JSON.stringify(data);
+    if (data instanceof FormData) options.body = data;
+    else {
+      options.headers["Content-Type"] = "application/json";
+      options.body = JSON.stringify(data);
+    }
   }
   let response;
   try {
@@ -54,7 +64,17 @@ async function api(path, data) {
   } catch {
     throw new Error("Der Messenger ist derzeit nicht erreichbar.");
   }
-  if (!response.ok) throw new Error(value.error || "Die Aktion konnte nicht ausgeführt werden.");
+  if (path !== "api/state" && path !== "api/settings" && path !== "api/account/logout" && generation !== view.accountGeneration) {
+    const error = new Error("Das Matrix-Konto wurde gewechselt. Die vorherige Anfrage wurde verworfen.");
+    error.staleAccount = true;
+    throw error;
+  }
+  if (!response.ok) {
+    const error = new Error(value.error || "Die Aktion konnte nicht ausgeführt werden.");
+    error.code = value.code;
+    error.details = value.details;
+    throw error;
+  }
   return value;
 }
 
@@ -129,6 +149,7 @@ function renderStatus() {
   byId("new-chat").disabled = !connected;
   renderHeader();
   renderVerification();
+  renderManagementStatus();
 }
 
 function renderHeader() {
@@ -144,11 +165,14 @@ function renderHeader() {
   show(byId("invitation"), invited);
   show(byId("composer"), !invited);
   byId("join-room").disabled = !view.state.connected;
+  byId("room-settings").disabled = !view.state.connected || !joined;
   byId("message-input").disabled = !view.state.connected || !joined || view.sending.has(room.room_id);
   byId("send-message").disabled = byId("message-input").disabled || !byId("message-input").value.trim();
   byId("send-message").textContent = view.sending.has(room.room_id) ? "…" : "↑";
   const notice = view.state.error || (!view.state.connected ? "Matrix ist offline. Du kannst den bereits geladenen Verlauf weiterhin lesen." : "");
   errorText(byId("chat-notice"), notice);
+  const missingKeys = (view.state.diagnostics?.rooms_missing_keys || []).some(item => item.room_id === room.room_id && item.count > 0);
+  show(byId("crypto-notice"), missingKeys);
 }
 
 function historyFor(roomId) {
@@ -201,6 +225,7 @@ function renderTimeline(roomId, mode = "refresh") {
 }
 
 async function loadHistory(roomId, older = false) {
+  const generation = view.accountGeneration;
   if (!roomId || view.loading.has(roomId)) return;
   const room = roomById(roomId);
   if (room?.membership === "invite") return;
@@ -224,17 +249,21 @@ async function loadHistory(roomId, older = false) {
       markRead(roomId);
     }
   } catch (error) {
+    if (error.staleAccount || generation !== view.accountGeneration) return;
     if (view.selected === roomId) {
       byId("composer-error").dataset.source = "history";
       errorText(byId("composer-error"), error.message);
     }
   } finally {
-    view.loading.delete(roomId);
-    byId("load-history").disabled = false;
+    if (generation === view.accountGeneration) {
+      view.loading.delete(roomId);
+      byId("load-history").disabled = false;
+    }
   }
 }
 
 async function markRead(roomId) {
+  const generation = view.accountGeneration;
   if (!view.state.connected || document.hidden) return;
   if (window.matchMedia("(max-width: 620px)").matches && !byId("messenger").classList.contains("chat-open")) return;
   const history = historyFor(roomId);
@@ -244,7 +273,7 @@ async function markRead(roomId) {
   try {
     await api(`api/rooms/${encodeURIComponent(roomId)}/read`, {});
   } catch {
-    view.reads.delete(roomId);
+    if (generation === view.accountGeneration) view.reads.delete(roomId);
   }
 }
 
@@ -257,6 +286,7 @@ async function selectRoom(roomId) {
   byId("messages").replaceChildren();
   byId("message-input").value = view.drafts.get(roomId) || "";
   errorText(byId("composer-error"), "");
+  show(byId("composer-security"), false);
   renderRooms();
   renderHeader();
   const history = historyFor(roomId);
@@ -276,6 +306,7 @@ function transactionId() {
 
 async function sendMessage(event) {
   event.preventDefault();
+  const generation = view.accountGeneration;
   const roomId = view.selected;
   const input = byId("message-input");
   const text = input.value;
@@ -287,6 +318,7 @@ async function sendMessage(event) {
   }
   view.sending.add(roomId);
   errorText(byId("composer-error"), "");
+  show(byId("composer-security"), false);
   renderHeader();
   try {
     const result = await api(`api/rooms/${encodeURIComponent(roomId)}/send`, {text, transaction_id: transaction.id});
@@ -299,30 +331,81 @@ async function sendMessage(event) {
     }
     await loadHistory(roomId);
   } catch (error) {
+    if (error.staleAccount || generation !== view.accountGeneration) return;
     if (view.selected === roomId) {
       byId("composer-error").dataset.source = "send";
       errorText(byId("composer-error"), error.message + " Dein Text bleibt erhalten. Erneutes Senden verwendet dieselbe Nachrichten-ID.");
+      show(byId("composer-security"), ["unverified_devices", "encryption_not_ready"].includes(error.code));
     }
   } finally {
-    view.sending.delete(roomId);
-    renderHeader();
+    if (generation === view.accountGeneration) {
+      view.sending.delete(roomId);
+      renderHeader();
+    }
   }
 }
 
-async function refreshState() {
-  const previousAccount = view.state.user_id;
-  const state = await api("api/state");
-  view.state = {...state, rooms: Array.isArray(state.rooms) ? state.rooms : [], verification: Array.isArray(state.verification) ? state.verification : [], devices: Array.isArray(state.devices) ? state.devices : []};
-  if (previousAccount && previousAccount !== view.state.user_id) {
-    view.histories.clear();
-    view.drafts.clear();
-    view.transactions.clear();
-    view.reads.clear();
-    view.selected = null;
-    show(byId("welcome"), true);
-    show(byId("chat-view"), false);
-    byId("messenger").classList.remove("chat-open");
+function clearAccountView() {
+  view.accountGeneration += 1;
+  view.histories = new Map();
+  view.drafts = new Map();
+  view.transactions = new Map();
+  view.reads = new Map();
+  view.loading = new Set();
+  view.sending = new Set();
+  view.selected = null;
+  view.activeVerification = null;
+  view.fingerprintDevice = null;
+  view.managedRoom = null;
+  view.settings = null;
+  view.query = "";
+  view.filter = "all";
+  for (const tab of document.querySelectorAll("[data-filter]")) {
+    const active = tab.dataset.filter === "all";
+    tab.classList.toggle("active", active);
+    tab.setAttribute("aria-pressed", String(active));
   }
+  byId("search").value = "";
+  byId("messages").replaceChildren();
+  byId("message-input").value = "";
+  byId("chat-title").textContent = "";
+  byId("chat-subtitle").textContent = "";
+  byId("header-avatar").textContent = "";
+  byId("encryption-label").textContent = "";
+  byId("managed-room-id").value = "";
+  byId("room-dialog-title").textContent = "Raum verwalten";
+  byId("leave-confirm-text").textContent = "";
+  byId("verification-description").textContent = "";
+  byId("logout-confirm-text").textContent = "";
+  show(byId("logout-confirm"), false);
+  byId("verification-devices").replaceChildren();
+  byId("verification-emoji").replaceChildren();
+  byId("fingerprint-value").textContent = "";
+  byId("fingerprint-device").textContent = "";
+  byId("key-import-result").textContent = "";
+  errorText(byId("composer-error"), "");
+  show(byId("composer-security"), false);
+  show(byId("crypto-notice"), false);
+  for (const dialog of document.querySelectorAll("dialog")) {
+    if (dialog.open) dialog.close();
+    for (const form of dialog.querySelectorAll("form")) form.reset();
+  }
+  clearSecretInputs();
+  byId("settings-bridge-room").replaceChildren();
+  show(byId("welcome"), true);
+  show(byId("chat-view"), false);
+  byId("messenger").classList.remove("chat-open");
+}
+
+async function refreshState() {
+  const generation = view.accountGeneration;
+  const previousAccount = view.state.account_id || view.state.user_id;
+  const state = await api("api/state");
+  if (generation !== view.accountGeneration) return false;
+  const nextAccount = state.account_id || state.user_id;
+  const switched = Boolean(previousAccount && previousAccount !== nextAccount);
+  if (switched) clearAccountView();
+  view.state = {...state, rooms: Array.isArray(state.rooms) ? state.rooms : [], verification: Array.isArray(state.verification) ? state.verification : [], devices: Array.isArray(state.devices) ? state.devices : []};
   renderStatus();
   renderRooms();
   if (view.selected && !roomById(view.selected)) {
@@ -331,6 +414,8 @@ async function refreshState() {
     show(byId("chat-view"), false);
     byId("messenger").classList.remove("chat-open");
   }
+  if (switched) await loadSettings(false);
+  return true;
 }
 
 async function poll() {
@@ -340,6 +425,7 @@ async function poll() {
     await refreshState();
     if (view.selected) await loadHistory(view.selected);
   } catch (error) {
+    if (error.staleAccount) return;
     view.state.connected = false;
     view.state.error = error.message;
     renderStatus();
@@ -357,12 +443,14 @@ function openDirect() {
 
 async function createDirect(event) {
   event.preventDefault();
+  const generation = view.accountGeneration;
   const userId = byId("direct-user").value.trim();
   byId("create-direct").disabled = true;
   errorText(byId("direct-error"), "");
   try {
     const result = await api("api/direct", {user_id: userId});
     await refreshState();
+    if (generation !== view.accountGeneration) return;
     if (result.room_id) {
       if (!roomById(result.room_id)) view.state.rooms.push({room_id: result.room_id, name: userId, is_direct: true, membership: "join"});
       await selectRoom(result.room_id);
@@ -407,6 +495,10 @@ function renderVerification() {
   emoji.replaceChildren();
   const confirm = byId("verification-confirm");
   const cancel = byId("verification-cancel");
+  show(byId("security-guide"), !verification);
+  const pendingKeys = Number(view.state.diagnostics?.pending_encrypted_count || 0);
+  byId("key-diagnostics").textContent = pendingKeys ? `${pendingKeys} gespeicherte Nachrichten warten auf Raumschlüssel. Für alte Nachrichten kann ein Schlüsselimport erforderlich sein.` : "Zurzeit sind keine fehlenden Raumschlüssel bekannt.";
+  byId("retry-keys").disabled = !view.state.connected;
   show(confirm, Boolean(verification));
   show(cancel, Boolean(verification));
   if (!verification) {
@@ -419,10 +511,18 @@ function renderVerification() {
       if (device.verified) row.append(element("span", "verified-label", "Bestätigt"));
       else if (device.device_id === view.state.device_id && device.user_id === view.state.user_id) row.append(element("span", "verified-label", "Dieses Gerät"));
       else {
-        const button = element("button", "quiet-button", "Bestätigen");
+        const actions = element("div", "device-actions");
+        const button = element("button", "quiet-button", "Symbole vergleichen");
         button.disabled = !view.state.connected;
         button.addEventListener("click", () => startVerification(device, button));
-        row.append(button);
+        actions.append(button);
+        if (device.fingerprint) {
+          const fingerprint = element("button", "quiet-button", "Fingerabdruck vergleichen");
+          fingerprint.disabled = !view.state.connected;
+          fingerprint.addEventListener("click", () => openFingerprint(device));
+          actions.append(fingerprint);
+        }
+        row.append(actions);
       }
       devices.append(row);
     }
@@ -452,7 +552,7 @@ function renderVerification() {
 
 function openVerification() {
   errorText(byId("verification-error"), "");
-  byId("verification-dialog").showModal();
+  if (!byId("verification-dialog").open) byId("verification-dialog").showModal();
   renderVerification();
 }
 
@@ -493,6 +593,343 @@ async function verificationAction(action) {
   }
 }
 
+const settingInputs = {
+  matrix: {homeserver: "homeserver", user_id: "user-id", password: "password", access_token: "access-token", device_id: "device-id", room_id: "room-id"},
+  meshtastic: {enabled: "enabled", connection: "connection", channel_index: "channel-index", channel_psk: "channel-psk", tcp_host: "tcp-host", tcp_port: "tcp-port", serial_device: "serial-device", ble_address: "ble-address", mqtt_host: "mqtt-host", mqtt_port: "mqtt-port", mqtt_username: "mqtt-username", mqtt_password: "mqtt-password", mqtt_tls: "mqtt-tls", mqtt_topic: "mqtt-topic", mqtt_channel_name: "mqtt-channel-name", mqtt_gateway_id: "mqtt-gateway-id"},
+  forwarding: {include_sender: "include-sender", max_message_age_seconds: "max-age", message_interval_seconds: "message-interval", long_message: "long-message", max_parts: "max-parts"}
+};
+const secretSettings = ["password", "access_token", "channel_psk", "mqtt_password"];
+
+function clearSecretInputs() {
+  for (const field of ["password", "access-token", "channel-psk", "mqtt-password"]) {
+    byId("settings-" + field).value = "";
+    byId("settings-" + field + "-clear").checked = false;
+  }
+  byId("settings-channel-psk").type = "password";
+  byId("show-channel-psk").checked = false;
+}
+
+function setSettingsTab(name) {
+  for (const button of document.querySelectorAll("[data-settings-tab]")) {
+    button.classList.toggle("active", button.dataset.settingsTab === name);
+    button.setAttribute("aria-pressed", String(button.dataset.settingsTab === name));
+  }
+  for (const section of document.querySelectorAll("[data-settings-section]")) show(section, section.dataset.settingsSection === name);
+}
+
+function renderRadioFields() {
+  show(byId("radio-fields"), byId("settings-enabled").checked);
+  for (const section of document.querySelectorAll("[data-radio-connection]")) show(section, section.dataset.radioConnection === byId("settings-connection").value);
+}
+
+function populateBridgeRooms(value) {
+  const selector = byId("settings-bridge-room");
+  selector.replaceChildren();
+  const empty = element("option", "", "Keinen Raum weiterleiten");
+  empty.value = "";
+  selector.append(empty);
+  for (const room of view.state.rooms || []) {
+    if (room.membership && room.membership !== "join") continue;
+    const option = element("option", "", roomName(room));
+    option.value = room.room_id;
+    selector.append(option);
+  }
+  if (value && ![...selector.options].some(option => option.value === value)) {
+    const option = element("option", "", "Manuell: " + value);
+    option.value = value;
+    selector.append(option);
+  }
+  selector.value = value || "";
+}
+
+function fillSettings(value) {
+  view.settings = value;
+  const defaults = {
+    matrix: {homeserver: "https://matrix.org", user_id: "", device_id: "", room_id: ""},
+    meshtastic: {enabled: false, connection: "tcp", channel_index: 0, tcp_host: "", tcp_port: 4403, serial_device: "", ble_address: "", mqtt_host: "", mqtt_port: 1883, mqtt_username: "", mqtt_tls: false, mqtt_topic: "msh/EU_868/2/e", mqtt_channel_name: "", mqtt_gateway_id: ""},
+    forwarding: {include_sender: true, max_message_age_seconds: 300, message_interval_seconds: 5, long_message: "split", max_parts: 4}
+  };
+  for (const [group, fields] of Object.entries(settingInputs)) for (const [key, suffix] of Object.entries(fields)) {
+    const input = byId("settings-" + suffix);
+    if (secretSettings.includes(key)) input.value = "";
+    else if (input.type === "checkbox") input.checked = Boolean(value[group]?.[key] ?? defaults[group][key]);
+    else input.value = value[group]?.[key] ?? defaults[group][key] ?? "";
+  }
+  for (const [group, key, suffix] of [["matrix", "password", "password"], ["matrix", "access_token", "access-token"], ["meshtastic", "channel_psk", "channel-psk"], ["meshtastic", "mqtt_password", "mqtt-password"]]) {
+    byId("settings-" + suffix + "-status").textContent = value[group]?.["has_" + key] ? "Gespeichert. Leer lassen, um den vorhandenen Wert zu behalten." : "Noch nicht gespeichert.";
+  }
+  clearSecretInputs();
+  populateBridgeRooms(value.matrix?.room_id || "");
+  renderRadioFields();
+  renderManagementStatus();
+}
+
+async function loadSettings(autoOpen = false) {
+  try {
+    const value = await api("api/settings");
+    view.settings = value;
+    renderManagementStatus();
+    if (autoOpen && !view.setupOpened && (value.configured === false || value.config_valid === false)) {
+      view.setupOpened = true;
+      fillSettings(value);
+      setSettingsTab("matrix");
+      byId("settings-dialog").showModal();
+    }
+    return value;
+  } catch (error) {
+    if (error.staleAccount) return null;
+    if (byId("settings-dialog").open) errorText(byId("settings-error"), error.message);
+    return null;
+  }
+}
+
+function renderManagementStatus() {
+  const needsSetup = view.state.setup_required === true || view.settings?.configured === false || view.settings?.config_valid === false;
+  byId("settings-title").textContent = needsSetup ? "Matrix einrichten" : "Einstellungen";
+  byId("settings-eyebrow").textContent = needsSetup ? "ERSTE EINRICHTUNG" : "VERWALTUNG";
+  byId("settings-intro").textContent = needsSetup ? "Melde dein Matrix-Konto an. Meshtastic kannst du später einrichten." : "Matrix und die optionale Funkweiterleitung direkt hier verwalten.";
+  show(byId("welcome-setup"), needsSetup);
+  show(byId("welcome-new-chat"), !needsSetup);
+  byId("open-rooms").disabled = !view.state.connected;
+  byId("settings-security").disabled = !view.state.connected;
+  show(byId("logout-account"), view.settings?.configured === true);
+  const status = view.state.connected ? "Verbunden. Deine Chats werden automatisch abgeglichen. Verschlüsselte Chats bei Bedarf unter Geräte & Schlüssel bestätigen." : view.state.error || view.settings?.validation_error || "Speichere die Anmeldung. Danach werden deine Chats automatisch synchronisiert.";
+  byId("setup-progress").textContent = status;
+}
+
+async function openSettings() {
+  errorText(byId("settings-error"), "");
+  errorText(byId("settings-result"), "");
+  setSettingsTab("matrix");
+  if (!byId("settings-dialog").open) byId("settings-dialog").showModal();
+  byId("save-settings").disabled = true;
+  const inputs = [...byId("settings-form").querySelectorAll("input, select")];
+  for (const input of inputs) input.disabled = true;
+  const value = await loadSettings();
+  if (value) fillSettings(value);
+  for (const input of inputs) input.disabled = !value;
+  byId("save-settings").disabled = !value;
+}
+
+async function saveSettings(event) {
+  event.preventDefault();
+  const payload = {matrix: {}, meshtastic: {}, forwarding: {}};
+  for (const [group, fields] of Object.entries(settingInputs)) for (const [key, suffix] of Object.entries(fields)) {
+    const input = byId("settings-" + suffix);
+    payload[group][key] = input.type === "checkbox" ? input.checked : input.type === "number" ? Number(input.value) : secretSettings.includes(key) ? input.value : input.value.trim();
+    if (secretSettings.includes(key)) payload[group][key + "_clear"] = byId("settings-" + suffix + "-clear").checked;
+  }
+  byId("save-settings").disabled = true;
+  errorText(byId("settings-error"), "");
+  errorText(byId("settings-result"), "");
+  try {
+    const value = await api("api/settings", payload);
+    fillSettings(value);
+    errorText(byId("settings-result"), "Gespeichert. Die Verbindung wird jetzt mit diesen Einstellungen hergestellt.");
+    await refreshState();
+  } catch (error) {
+    errorText(byId("settings-error"), error.message);
+  } finally {
+    clearSecretInputs();
+    byId("save-settings").disabled = false;
+  }
+}
+
+async function discoverSerial() {
+  byId("discover-serial").disabled = true;
+  try {
+    const result = await api("api/devices/discover");
+    const list = byId("serial-devices");
+    list.replaceChildren();
+    for (const device of result.serial || []) {
+      const option = element("option", "", device.label || device.path);
+      option.value = device.path;
+      list.append(option);
+    }
+    if ((result.serial || []).length === 1 && !byId("settings-serial-device").value) byId("settings-serial-device").value = result.serial[0].path;
+    byId("serial-status").textContent = result.serial?.length ? `${result.serial.length} USB-Geräte gefunden. Das passende Gerät auswählen.` : "Kein serielles Gerät gefunden. Verbindung und Gerätezugriff prüfen.";
+  } catch (error) {
+    byId("serial-status").textContent = error.message;
+  } finally {
+    byId("discover-serial").disabled = false;
+  }
+}
+
+function showRoomsDialog() {
+  errorText(byId("rooms-error"), "");
+  byId("rooms-dialog").showModal();
+}
+
+async function activateRoom(result, fallbackName) {
+  const generation = view.accountGeneration;
+  await refreshState();
+  if (generation !== view.accountGeneration) return false;
+  if (result.room_id) {
+    if (!roomById(result.room_id)) view.state.rooms.push({room_id: result.room_id, name: fallbackName || result.room_id, membership: "join"});
+    await selectRoom(result.room_id);
+  }
+  return true;
+}
+
+async function createRoom(event) {
+  event.preventDefault();
+  const name = byId("new-room-name").value.trim();
+  const invite = byId("new-room-invite").value.split(/[\s,;]+/).filter(Boolean);
+  byId("create-room").disabled = true;
+  errorText(byId("rooms-error"), "");
+  try {
+    const result = await api("api/rooms/create", {name, invite, encrypted: byId("new-room-encrypted").checked});
+    if (!await activateRoom(result, name)) return;
+    byId("rooms-dialog").close();
+    byId("create-room-form").reset();
+  } catch (error) {
+    errorText(byId("rooms-error"), error.message);
+  } finally {
+    byId("create-room").disabled = false;
+  }
+}
+
+async function joinExisting(event) {
+  event.preventDefault();
+  byId("join-existing").disabled = true;
+  errorText(byId("rooms-error"), "");
+  try {
+    const result = await api("api/rooms/join", {room_id: byId("join-existing-id").value.trim()});
+    if (!await activateRoom(result)) return;
+    byId("rooms-dialog").close();
+    byId("join-existing-form").reset();
+  } catch (error) {
+    errorText(byId("rooms-error"), error.message);
+  } finally {
+    byId("join-existing").disabled = false;
+  }
+}
+
+function openRoomSettings() {
+  const room = roomById(view.selected);
+  if (!room) return;
+  view.managedRoom = room.room_id;
+  byId("room-dialog-title").textContent = roomName(room);
+  byId("managed-room-id").value = room.room_id;
+  byId("managed-room-name").value = roomName(room);
+  byId("invite-room-user").value = "";
+  errorText(byId("room-error"), "");
+  errorText(byId("room-result"), "");
+  show(byId("leave-confirm"), false);
+  byId("room-dialog").showModal();
+}
+
+async function roomAction(path, payload, message, buttonId) {
+  const generation = view.accountGeneration;
+  if (!view.managedRoom) return;
+  byId(buttonId).disabled = true;
+  errorText(byId("room-error"), "");
+  errorText(byId("room-result"), "");
+  try {
+    await api(`api/rooms/${encodeURIComponent(view.managedRoom)}/${path}`, payload);
+    await refreshState();
+    if (generation !== view.accountGeneration) return;
+    errorText(byId("room-result"), message);
+    if (path === "leave") byId("room-dialog").close();
+  } catch (error) {
+    errorText(byId("room-error"), error.message);
+  } finally {
+    byId(buttonId).disabled = false;
+  }
+}
+
+function openFingerprint(device) {
+  view.fingerprintDevice = {user_id: device.user_id, device_id: device.device_id, fingerprint: device.fingerprint};
+  byId("fingerprint-device").textContent = `${device.user_id} · ${device.device_id}`;
+  byId("fingerprint-value").textContent = String(device.fingerprint).replace(/\s/g, "").match(/.{1,4}/g)?.join(" ") || device.fingerprint;
+  byId("fingerprint-confirmed").checked = false;
+  byId("fingerprint-submit").disabled = true;
+  errorText(byId("fingerprint-error"), "");
+  byId("fingerprint-dialog").showModal();
+}
+
+async function verifyFingerprint(event) {
+  event.preventDefault();
+  if (!view.fingerprintDevice || !byId("fingerprint-confirmed").checked) return;
+  byId("fingerprint-submit").disabled = true;
+  try {
+    await api("api/verification/device", {...view.fingerprintDevice, confirmed: true});
+    byId("fingerprint-dialog").close();
+    await refreshState();
+  } catch (error) {
+    errorText(byId("fingerprint-error"), error.message);
+  } finally {
+    byId("fingerprint-submit").disabled = !byId("fingerprint-confirmed").checked;
+  }
+}
+
+async function retryKeys() {
+  byId("retry-keys").disabled = true;
+  errorText(byId("verification-error"), "");
+  try {
+    await api("api/keys/retry", {});
+    await refreshState();
+    if (view.selected) await loadHistory(view.selected);
+  } catch (error) {
+    errorText(byId("verification-error"), error.message);
+  } finally {
+    byId("retry-keys").disabled = !view.state.connected;
+  }
+}
+
+async function importKeys(event) {
+  event.preventDefault();
+  const generation = view.accountGeneration;
+  const file = byId("key-file").files[0];
+  const passphrase = byId("key-passphrase").value;
+  const resultText = byId("key-import-result");
+  resultText.textContent = "";
+  if (!file || !passphrase) return;
+  if (file.size > 10 * 1024 * 1024) {
+    resultText.textContent = "Die Schlüsseldatei darf höchstens 10 MB groß sein.";
+    return;
+  }
+  const data = new FormData();
+  data.append("file", file);
+  data.append("passphrase", passphrase);
+  byId("import-keys").disabled = true;
+  try {
+    const result = await api("api/keys/import", data);
+    await refreshState();
+    if (generation !== view.accountGeneration) return;
+    const remaining = result.pending_encrypted_count ?? result.remaining ?? view.state.diagnostics?.pending_encrypted_count;
+    resultText.textContent = "Schlüssel importiert." + (remaining === undefined ? " Verfügbare Nachrichten werden entschlüsselt." : ` ${remaining} Nachrichten warten noch auf weitere Schlüssel.`);
+    byId("key-file").value = "";
+    if (view.selected) await loadHistory(view.selected);
+  } catch (error) {
+    if (error.staleAccount || generation !== view.accountGeneration) return;
+    resultText.textContent = error.message;
+  } finally {
+    byId("key-passphrase").value = "";
+    byId("import-keys").disabled = false;
+  }
+}
+
+async function logoutAccount() {
+  byId("confirm-logout").disabled = true;
+  errorText(byId("settings-error"), "");
+  try {
+    const result = await api("api/account/logout", {confirmed: true});
+    clearAccountView();
+    view.state = {connected: false, user_id: "", rooms: [], devices: [], verification: [], setup_required: true};
+    const settings = await loadSettings(false);
+    if (settings) fillSettings(settings);
+    setSettingsTab("matrix");
+    errorText(byId("settings-result"), result.logout_notice || "Abgemeldet. Du kannst jetzt ein Matrix-Konto einrichten.");
+    if (!byId("settings-dialog").open) byId("settings-dialog").showModal();
+    await refreshState();
+  } catch (error) {
+    errorText(byId("settings-error"), error.message);
+  } finally {
+    byId("confirm-logout").disabled = false;
+  }
+}
+
 byId("search").addEventListener("input", event => { view.query = event.target.value.toLowerCase(); renderRooms(); });
 for (const button of document.querySelectorAll("[data-filter]")) button.addEventListener("click", () => {
   view.filter = button.dataset.filter;
@@ -518,5 +955,66 @@ byId("close-verification").addEventListener("click", () => byId("verification-di
 byId("verification-dialog").addEventListener("close", () => { view.activeVerification = null; renderVerification(); });
 byId("verification-confirm").addEventListener("click", () => verificationAction(byId("verification-confirm").dataset.action));
 byId("verification-cancel").addEventListener("click", () => verificationAction(byId("verification-cancel").dataset.action));
+byId("open-settings").addEventListener("click", openSettings);
+byId("welcome-setup").addEventListener("click", openSettings);
+byId("close-settings").addEventListener("click", () => byId("settings-dialog").close());
+byId("settings-dialog").addEventListener("close", clearSecretInputs);
+byId("settings-form").addEventListener("submit", saveSettings);
+for (const button of document.querySelectorAll("[data-settings-tab]")) button.addEventListener("click", () => setSettingsTab(button.dataset.settingsTab));
+byId("settings-enabled").addEventListener("change", renderRadioFields);
+byId("settings-connection").addEventListener("change", renderRadioFields);
+byId("settings-bridge-room").addEventListener("change", event => { byId("settings-room-id").value = event.target.value; });
+byId("settings-room-id").addEventListener("input", event => populateBridgeRooms(event.target.value));
+byId("generate-psk").addEventListener("click", () => {
+  const key = crypto.getRandomValues(new Uint8Array(32));
+  byId("settings-channel-psk").value = btoa(String.fromCharCode(...key));
+  byId("settings-channel-psk-clear").checked = false;
+  byId("show-channel-psk").checked = true;
+  byId("settings-channel-psk").type = "text";
+  byId("settings-channel-psk-status").textContent = "Neuer privater Schlüssel erzeugt. Auch auf dem Funkgerät eintragen und anschließend speichern.";
+});
+byId("show-channel-psk").addEventListener("change", event => { byId("settings-channel-psk").type = event.target.checked ? "text" : "password"; });
+byId("copy-psk").addEventListener("click", async () => {
+  const value = byId("settings-channel-psk").value;
+  try {
+    if (!value) throw new Error("Zum Kopieren einen neuen Schlüssel eingeben oder erzeugen. Gespeicherte Schlüssel werden nicht zurückgelesen.");
+    await navigator.clipboard.writeText(value);
+    byId("settings-channel-psk-status").textContent = "Schlüssel kopiert. Auf dem Funkgerät denselben Schlüssel verwenden.";
+  } catch (error) {
+    byId("settings-channel-psk-status").textContent = error.message || "Kopieren nicht möglich. Den angezeigten Schlüssel manuell kopieren.";
+  }
+});
+byId("discover-serial").addEventListener("click", discoverSerial);
+byId("settings-security").addEventListener("click", () => { byId("settings-dialog").close(); openVerification(); });
+byId("logout-account").addEventListener("click", () => {
+  byId("logout-confirm-text").textContent = `Von „${view.settings?.matrix?.user_id || view.state.user_id || "diesem Matrix-Konto"}“ wirklich abmelden?`;
+  show(byId("logout-confirm"), true);
+});
+byId("cancel-logout").addEventListener("click", () => show(byId("logout-confirm"), false));
+byId("confirm-logout").addEventListener("click", logoutAccount);
+byId("open-rooms").addEventListener("click", showRoomsDialog);
+byId("close-rooms").addEventListener("click", () => byId("rooms-dialog").close());
+byId("create-room-form").addEventListener("submit", createRoom);
+byId("join-existing-form").addEventListener("submit", joinExisting);
+byId("room-settings").addEventListener("click", openRoomSettings);
+byId("close-room-dialog").addEventListener("click", () => byId("room-dialog").close());
+byId("rename-room-form").addEventListener("submit", event => { event.preventDefault(); roomAction("rename", {name: byId("managed-room-name").value.trim()}, "Raumname gespeichert.", "rename-room"); });
+byId("invite-room-form").addEventListener("submit", event => { event.preventDefault(); roomAction("invite", {user_id: byId("invite-room-user").value.trim()}, "Einladung gesendet.", "invite-room"); });
+byId("leave-room").addEventListener("click", () => {
+  const room = roomById(view.managedRoom);
+  byId("leave-confirm-text").textContent = `Den Raum „${room ? roomName(room) : view.managedRoom}“ wirklich verlassen? Für einen erneuten Beitritt kann eine neue Einladung erforderlich sein.`;
+  show(byId("leave-confirm"), true);
+});
+byId("cancel-leave").addEventListener("click", () => show(byId("leave-confirm"), false));
+byId("confirm-leave").addEventListener("click", () => roomAction("leave", {confirmed: true}, "Raum verlassen.", "confirm-leave"));
+byId("close-fingerprint").addEventListener("click", () => byId("fingerprint-dialog").close());
+byId("fingerprint-dialog").addEventListener("close", () => { view.fingerprintDevice = null; byId("fingerprint-confirmed").checked = false; });
+byId("fingerprint-confirmed").addEventListener("change", event => { byId("fingerprint-submit").disabled = !event.target.checked; });
+byId("fingerprint-form").addEventListener("submit", verifyFingerprint);
+byId("retry-keys").addEventListener("click", retryKeys);
+byId("key-import-form").addEventListener("submit", importKeys);
+byId("verification-dialog").addEventListener("close", () => { byId("key-passphrase").value = ""; byId("key-file").value = ""; });
+byId("composer-security").addEventListener("click", openVerification);
+byId("chat-security").addEventListener("click", openVerification);
 document.addEventListener("visibilitychange", () => { if (!document.hidden && view.selected) markRead(view.selected); });
-poll();
+loadSettings(true).finally(poll);

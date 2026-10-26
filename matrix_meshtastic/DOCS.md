@@ -17,22 +17,28 @@ Für eine lokale Installation den Ordner `matrix_meshtastic` in das Add-on-Verze
 
 ## Matrix-Messenger ohne Meshtastic
 
-1. Unter `matrix` die Homeserver-Adresse und die vollständige `user_id` des gewünschten Matrix-Kontos eintragen.
-2. Für die Anmeldung entweder `password` oder `access_token` zusammen mit dessen `device_id` eintragen.
-3. `meshtastic.enabled` auf `false` lassen. Die Funkfelder und `matrix.room_id` dürfen leer bleiben.
-4. Die App starten und **Web-Oberfläche öffnen** auswählen. Alternativ die Ingress-Oberfläche als **Matrix Messenger** in der Seitenleiste anzeigen.
+1. Die App starten und **Web-Oberfläche öffnen** auswählen. Die Oberfläche startet auch ohne vorher eingetragene Zugangsdaten.
+2. Unter **Einstellungen → Matrix-Konto** die Serveradresse, die vollständige Matrix-ID und das Passwort eintragen und **Speichern & verbinden** wählen. Einrichtungsbeispiel: Server `https://matrix.org`, Matrix-ID `@name:matrix.org`.
+3. Falls bereits ein Zugangstoken vorhanden ist, stehen Access-Token und zugehörige Geräte-ID unter **Erweiterte Anmeldung** zur Verfügung.
+4. Meshtastic ausgeschaltet lassen. Ein Funkgerät oder Funkschlüssel ist für den Messenger nicht erforderlich.
+
+Vorhandene App-Optionen werden bei der ersten Einrichtung übernommen. Über Ingress gespeicherte Einstellungen haben anschließend Vorrang und bleiben bei Neustarts und Updates erhalten. Änderungen werden übernommen, ohne die Ingress-Oberfläche neu zu starten. Bereits gespeicherte Passwörter und Schlüssel werden nicht zurück an den Browser übertragen; leere Geheimnisfelder behalten den vorhandenen Wert. Ein Kontowechsel übernimmt keine Zugangsdaten des vorherigen Kontos.
+
+Über **Abmelden** kann die aktuelle Anmeldung ausdrücklich beendet werden. Importierte lokale Schlüssel bleiben geschützt erhalten. Wenn die Server-Abmeldung wegen einer Verbindungsstörung nicht bestätigt werden kann, weist die Oberfläche darauf hin.
 
 Der Messenger zeigt die Räume, Direktnachrichten und Einladungen des angemeldeten Kontos. Nachrichten lassen sich lesen und schreiben, ältere Nachrichten nachladen, Einladungen annehmen und Direktnachrichten über eine Matrix-Benutzer-ID beginnen. Bestehende Nachrichten werden zur Anzeige synchronisiert, aber beim ersten Start nicht nachträglich ins Funknetz übertragen.
+
+Unter **Räume verwalten** lassen sich neue Räume erstellen und vorhandene Räume über Raum-ID oder Alias öffnen. Die Verwaltung eines geöffneten Raums bietet Umbenennen, Einladen und bestätigtes Verlassen. Diese Aktionen benötigen die jeweiligen Berechtigungen des Matrix-Kontos.
 
 Chatverlauf und Geräteschlüssel bleiben unter `/data` gespeichert und sind Teil des App-Backups. Bei einer Unterbrechung bleibt der vorhandene lokale Verlauf sichtbar. Ein Wechsel des Matrix-Kontos trennt dessen Chatdaten vom vorherigen Konto. Zugangstoken und Schlüssel werden nicht an den Browser ausgegeben. Die Oberfläche ist ausschließlich über den authentifizierten Home-Assistant-Ingress zugänglich.
 
 ## Optionale Meshtastic-Bridge
 
-1. `meshtastic.enabled` auf `true` setzen.
-2. In `matrix.room_id` den Raum für die Funkweiterleitung eintragen. Bei Raumversion 12 ist das eine interne ID mit `!` ohne Server-Endung; ältere IDs sehen wie `!raum:example.org` aus. Alternativ ist ein Alias wie `#raum:example.org` möglich. Das Matrix-Konto muss dem Raum angehören.
-3. Unter `meshtastic.connection` eine Verbindungsart auswählen und deren Felder ausfüllen.
-4. `channel_index` auf den lokalen privaten Channel des Knotens setzen und dessen AES-Schlüssel als Base64 in `channel_psk` eintragen.
-5. Die App neu starten. Nur der ausgewählte Matrix-Raum wird mit diesem Funkchannel verbunden. Andere Räume und Direktnachrichten bleiben im Matrix-Messenger.
+1. In **Einstellungen → Meshtastic** die Bridge aktivieren.
+2. Den Matrix-Raum für die Funkweiterleitung aus der Liste wählen. Alternativ kann die interne Raum-ID oder ein Alias manuell eingetragen werden.
+3. Die Verbindung auswählen und die angezeigten Felder ausfüllen. Bei USB können verfügbare serielle Geräte gesucht werden.
+4. Den Channel-Slot und den privaten AES-Schlüssel des Funkgeräts eintragen. Die Oberfläche kann einen neuen privaten Schlüssel erzeugen; derselbe Schlüssel muss anschließend auch auf dem Funkgerät eingerichtet werden.
+5. **Speichern & verbinden** wählen. Nur der ausgewählte Matrix-Raum wird mit diesem Funkchannel verbunden. Andere Räume und Direktnachrichten bleiben im Matrix-Messenger.
 
 Ein fehlender oder unzulässiger Schlüssel sperrt nur die Funkweiterleitung. Ein nicht verbundenes Funkgerät wird erneut verbunden, während Matrix und Ingress weiterlaufen. Beide Verbindungszustände werden in der Oberfläche angezeigt. Nach einem Update von 0.1.x ist Meshtastic standardmäßig ausgeschaltet und muss bei Bedarf ausdrücklich aktiviert werden.
 
@@ -79,7 +85,18 @@ Bei Bedarf `mqtt_username` und `mqtt_password` ergänzen. Für TLS `mqtt_tls` ak
 
 Matrix-Ende-zu-Ende-Verschlüsselung wird unterstützt. Gerätesitzung und Schlüssel bleiben unter `/data` erhalten und gehören zum App-Backup. Unter **Geräte & Schlüssel** können bekannte Geräte zur Verifikation ausgewählt oder eingehende Verifikationsanfragen angenommen werden. Die angezeigten Emojis mit dem anderen Gerät vergleichen und nur bei Übereinstimmung auf beiden Geräten bestätigen. Andere Geräte werden nicht automatisch als vertrauenswürdig eingestuft.
 
+Wenn der bisherige Client den Symbolvergleich nicht anbietet, kann der vollständige Geräte-Fingerabdruck in dessen Geräteinformationen verglichen und anschließend in Ingress ausdrücklich bestätigt werden. Der gespeicherte Fingerabdruck wird vor der Bestätigung erneut geprüft. Nicht bestätigte Geräte können den Versand verschlüsselter Nachrichten blockieren; die Oberfläche zeigt dafür eine konkrete Aktion an.
+
 Raumteilnehmer müssen dem verwendeten Gerät bei Bedarf die Raum-Schlüssel freigeben. Noch nicht entschlüsselbare Nachrichten werden als solche dargestellt und bei verfügbaren Schlüsseln erneut entschlüsselt. Ohne verfügbare Schlüssel ist deren Inhalt nicht lesbar. Der Messenger zeigt in dieser Version Textnachrichten; Datei- und Medienversand ist nicht enthalten.
+
+### Element-Schlüsseldatei importieren
+
+1. Im bisherigen Matrix-Client, etwa Element, die Raumschlüssel als passwortgeschützte Datei exportieren. Das Exportpasswort wird dabei selbst gewählt.
+2. In Ingress **Geräte & Schlüssel → Schlüssel importieren** öffnen.
+3. Die exportierte Datei, beispielsweise `elements-keys.txt`, auswählen und die beim Export gewählte Passphrase eingeben.
+4. **Schlüssel importieren** wählen. Bereits empfangene Nachrichten werden mit den importierten Schlüsseln erneut entschlüsselt, ohne alte Nachrichten ins Funknetz zu übertragen.
+
+Unterstützt wird der verschlüsselte Megolm-Sitzungsexport mit bis zu 10 MB. Ein Matrix-Backup-Wiederherstellungsschlüssel ist ein anderes Format. Die Passphrase wird nicht gespeichert. Die temporäre Importdatei wird nach Erfolg oder Fehler entfernt; die importierten Sitzungen bleiben im geschützten lokalen Schlüsselspeicher erhalten.
 
 Die Bridge entschlüsselt Nachrichten zwischen den beiden Systemen. Für die Funkübertragung gilt der private Meshtastic-Schlüssel; die Matrix-Verschlüsselung reicht nicht bis zum Funkgerät.
 

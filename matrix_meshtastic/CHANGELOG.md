@@ -1,3 +1,13 @@
+# 0.3.0
+
+- Einrichtung und Verwaltung von Matrix, Meshtastic und Weiterleitung direkt in Ingress.
+- Die Oberfläche startet auch ohne vorhandene Matrix-Anmeldedaten.
+- Einstellungen lassen sich sicher speichern und ohne Neustart der Oberfläche anwenden.
+- Passwortgeschützte Element-Schlüsselexporte können importiert werden, um ältere Nachrichten zu entschlüsseln.
+- Räume erstellen, beitreten, umbenennen, Personen einladen und Räume verlassen.
+- Sicherer Kontowechsel mit getrennten Ansichten und bestätigtem Abmelden.
+- Verständliche Hinweise bei fehlenden Schlüsseln und nicht bestätigten Geräten sowie explizite Fingerabdruck-Bestätigung.
+
 # 0.2.0
 
 - Eigenständiger Matrix-Messenger über Home-Assistant-Ingress mit Räumen und Direktnachrichten.

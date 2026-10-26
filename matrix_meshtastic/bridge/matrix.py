@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import asyncio
+import hmac
 import json
 import logging
 import os
 import secrets
+import tempfile
 import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
@@ -27,7 +29,7 @@ from nio import (
     RedactionEvent,
     RoomPreset,
 )
-from nio.exceptions import EncryptionError, LocalProtocolError
+from nio.exceptions import EncryptionError, LocalProtocolError, OlmUnverifiedDeviceError
 from nio.responses import EmptyResponse
 
 from .config import MatrixSettings
@@ -51,6 +53,14 @@ class MatrixSetupError(RuntimeError):
 
 class MatrixConnectionError(RuntimeError):
     pass
+
+
+class MatrixActionError(MatrixSetupError):
+    def __init__(self, code: str, message: str, details: dict | None = None, status: int = 409):
+        super().__init__(message)
+        self.code = code
+        self.details = details or {}
+        self.status = status
 
 
 def _write_private(path: Path, value: Any) -> None:
@@ -100,6 +110,8 @@ class MatrixReceiver:
         self.bridge_error: str | None = None
         self._direct_rooms: dict[str, list[str]] = self.chat_store.get_metadata("direct_rooms", {})
         self.on_messenger_send: Callable[[MatrixMessage], Awaitable[None]] | None = None
+        self._key_retry_lock = asyncio.Lock()
+        self._missing_keys_logged: set[tuple[str, str]] = set()
 
     def _new_client(self, device_id: str) -> AsyncClient:
         key_path = self.data_dir / "crypto_key.json"
@@ -179,6 +191,8 @@ class MatrixReceiver:
                 ),
                 "Anmeldung",
             )
+        if client.user_id != self.settings.user_id:
+            raise MatrixSetupError("Die Anmeldung gehört nicht zur eingetragenen Matrix-ID. Die vollständige Benutzer-ID prüfen.")
         _write_private(
             session_path,
             {
@@ -351,7 +365,7 @@ class MatrixReceiver:
     async def _retry_encrypted(self) -> list[str]:
         assert self.client is not None
         decrypted: list[str] = []
-        for event_id, source in self._encrypted.items():
+        for event_id, source in list(self._encrypted.items()):
             room_id = source.get("room_id")
             if not isinstance(room_id, str) or not room_id:
                 decrypted.append(event_id)
@@ -360,19 +374,14 @@ class MatrixReceiver:
             if not isinstance(event, MegolmEvent):
                 decrypted.append(event_id)
                 continue
+            group_store = getattr(getattr(self.client, "olm", None), "inbound_group_store", None)
+            if group_store is not None and group_store.get(room_id, event.sender_key, event.session_id) is None:
+                await self._request_missing_key(event, room_id)
+                continue
             try:
                 cleartext = self.client.decrypt_event(event)
             except EncryptionError:
-                if event.session_id not in self.client.outgoing_key_requests:
-                    try:
-                        self._require_ok(
-                            await self.client.request_room_key(event), "Raumschlüsselanforderung"
-                        )
-                        LOGGER.warning(
-                            "Matrix-Raumschlüssel fehlen; Schlüssel beim Bot-Gerät freigeben"
-                        )
-                    except LocalProtocolError:
-                        pass
+                await self._request_missing_key(event, room_id)
                 continue
             room = getattr(self.client, "rooms", {}).get(room_id) or SimpleNamespace(room_id=room_id, encrypted=True)
             self._store_event(room, cleartext)
@@ -382,6 +391,18 @@ class MatrixReceiver:
                 self._messages.append(message)
             decrypted.append(event_id)
         return decrypted
+
+    async def _request_missing_key(self, event: MegolmEvent, room_id: str) -> None:
+        if event.session_id in self.client.outgoing_key_requests:
+            return
+        try:
+            self._require_ok(await self.client.request_room_key(event), "Raumschlüsselanforderung")
+            key = (room_id, event.session_id)
+            if key not in self._missing_keys_logged:
+                LOGGER.warning("Matrix-Raumschlüssel fehlen; Gerätefreigabe oder Schlüsselimport im Messenger öffnen.")
+                self._missing_keys_logged.add(key)
+        except LocalProtocolError:
+            pass
 
     async def _fill_gap(self, response: Any, since: str | None) -> None:
         assert self.client is not None
@@ -519,7 +540,161 @@ class MatrixReceiver:
             "rooms": [room for room in self.chat_store.snapshot_rooms() if room["membership"] != "leave"],
             "verification": verifications, "devices": devices, "error": self.error,
             "bridge_error": self.bridge_error,
+            "diagnostics": self.encryption_diagnostics(),
         }
+
+    def encryption_diagnostics(self) -> dict:
+        missing = {}
+        for source in self._encrypted.values():
+            if source.get("display_decrypted"):
+                continue
+            room_id = source.get("room_id")
+            if isinstance(room_id, str) and room_id:
+                missing[room_id] = missing.get(room_id, 0) + 1
+        rooms = []
+        for room_id, count in missing.items():
+            room = self.chat_store.room(room_id)
+            if room and room["membership"] == "leave":
+                continue
+            rooms.append({"room_id": room_id, "name": (room or {}).get("name", room_id), "count": count})
+        return {
+            "pending_encrypted_count": sum(room["count"] for room in rooms),
+            "rooms_missing_keys": rooms,
+            "unverified_device_count": len(self._unverified_devices()),
+            "key_import_available": True,
+        }
+
+    def _unverified_devices(self, room: Any = None) -> list[dict]:
+        client = self.client
+        if client is None or not getattr(client, "olm", None):
+            return []
+        users = getattr(room, "users", None) if room is not None else None
+        devices = []
+        for device in client.device_store:
+            if device.deleted or device.verified or device.ignored or device.blacklisted:
+                continue
+            if device.user_id == self.settings.user_id and device.id == client.device_id:
+                continue
+            if users is not None and device.user_id not in users:
+                continue
+            devices.append(self._device_info(device))
+        return devices
+
+    def _device_info(self, device: Any) -> dict:
+        return {
+            "user_id": device.user_id, "device_id": device.id,
+            "display_name": device.display_name or device.id,
+            "fingerprint": device.ed25519,
+            "verified": bool(device.verified),
+            "own_device": device.user_id == self.settings.user_id and device.id == getattr(self.client, "device_id", ""),
+        }
+
+    def _decrypt_for_display(self, room_id: str | None = None) -> int:
+        client = self._require_ready()
+        decrypted = 0
+        for event_id, source in list(self._encrypted.items()):
+            target = source.get("room_id")
+            if room_id is not None and target != room_id:
+                continue
+            room = self.chat_store.room(target) if isinstance(target, str) else None
+            if not room or room["membership"] != "join":
+                continue
+            event = MegolmEvent.from_dict(source)
+            if not isinstance(event, MegolmEvent):
+                continue
+            group_store = getattr(getattr(client, "olm", None), "inbound_group_store", None)
+            if group_store is not None and group_store.get(target, event.sender_key, event.session_id) is None:
+                continue
+            try:
+                cleartext = client.decrypt_event(event)
+            except EncryptionError:
+                continue
+            cached_room = client.rooms.get(target) or SimpleNamespace(room_id=target, encrypted=True)
+            self._store_event(cached_room, cleartext)
+            source["display_decrypted"] = True
+            if not source.get("bridge_eligible", target == self.room_id) or target != self.room_id:
+                self._encrypted.pop(event_id, None)
+            decrypted += 1
+        _write_private(self.data_dir / "pending_encrypted.json", self._encrypted)
+        return decrypted
+
+    async def import_room_keys(self, data: bytes, passphrase: str) -> dict:
+        client = self._require_ready()
+        if not isinstance(data, bytes) or not data or len(data) > 10 * 1024 * 1024:
+            raise ValueError("Eine Schlüsseldatei mit höchstens 10 MB wird benötigt.")
+        if not isinstance(passphrase, str) or not passphrase or len(passphrase) > 4096:
+            raise ValueError("Das Passwort der exportierten Schlüsseldatei wird benötigt.")
+        if not getattr(client, "olm", None):
+            raise MatrixActionError("encryption_not_ready", "Die Matrix-Verschlüsselung ist noch nicht bereit.")
+        async with self._key_retry_lock:
+            before = len(list(client.olm.inbound_group_store))
+            descriptor, filename = tempfile.mkstemp(prefix=".room-keys-", dir=self.data_dir)
+            try:
+                with os.fdopen(descriptor, "wb") as handle:
+                    handle.write(data)
+                    handle.flush()
+                    os.fsync(handle.fileno())
+                try:
+                    await client.import_keys(filename, passphrase)
+                except (EncryptionError, ValueError, UnicodeError, OSError):
+                    raise MatrixActionError(
+                        "key_import_failed",
+                        "Die Schlüsseldatei konnte nicht geöffnet werden. Exportdatei und deren Exportpasswort prüfen.",
+                        status=400,
+                    ) from None
+            finally:
+                Path(filename).unlink(missing_ok=True)
+            imported = max(0, len(list(client.olm.inbound_group_store)) - before)
+            decrypted = self._decrypt_for_display()
+        return {"imported_keys": imported, "decrypted_messages": decrypted, **self.encryption_diagnostics()}
+
+    async def retry_keys(self, room_id: str | None = None) -> dict:
+        client = self._require_ready()
+        if room_id is not None:
+            self._require_joined(room_id)
+        requested = 0
+        async with self._key_retry_lock:
+            await self._crypto_maintenance()
+            sessions = set()
+            for source in list(self._encrypted.values()):
+                target = source.get("room_id")
+                if room_id is not None and target != room_id:
+                    continue
+                room = self.chat_store.room(target) if isinstance(target, str) else None
+                if not room or room["membership"] != "join":
+                    continue
+                event = MegolmEvent.from_dict(source)
+                if not isinstance(event, MegolmEvent) or event.session_id in sessions:
+                    continue
+                sessions.add(event.session_id)
+                if event.session_id in client.outgoing_key_requests:
+                    request = event.as_key_request(self.settings.user_id, client.device_id)
+                    self._require_ok(await client.to_device(request), "Raumschlüssel erneut anfordern")
+                else:
+                    self._require_ok(await client.request_room_key(event), "Raumschlüssel anfordern")
+                requested += 1
+                if requested >= 50:
+                    break
+            decrypted = self._decrypt_for_display(room_id)
+        return {"requested_sessions": requested, "decrypted_messages": decrypted, **self.encryption_diagnostics()}
+
+    async def verify_device_fingerprint(self, user_id: str, device_id: str, fingerprint: str, confirmed: bool) -> dict:
+        client = self._require_ready()
+        if confirmed is not True:
+            raise MatrixActionError("confirmation_required", "Den Fingerabdruck zuerst mit dem anderen Gerät vergleichen und ausdrücklich bestätigen.", status=400)
+        if not all(isinstance(value, str) and value for value in (user_id, device_id, fingerprint)):
+            raise ValueError("Ein Gerät mit vollständigem Fingerabdruck wird benötigt.")
+        if not getattr(client, "olm", None):
+            raise MatrixActionError("encryption_not_ready", "Die Matrix-Verschlüsselung ist noch nicht bereit.")
+        device = client.device_store[user_id].get(device_id)
+        if device is None or device.deleted or (device.user_id == self.settings.user_id and device.id == client.device_id):
+            raise MatrixSetupError("Dieses Matrix-Gerät ist nicht verfügbar.")
+        expected = device.ed25519
+        supplied = "".join(fingerprint.split())
+        if not expected or not hmac.compare_digest(expected.encode(), supplied.encode()):
+            raise MatrixActionError("fingerprint_mismatch", "Der Fingerabdruck stimmt nicht mehr überein. Das Gerät neu auswählen und erneut vergleichen.", {"user_id": user_id, "device_id": device_id})
+        changed = client.verify_device(device)
+        return {"verified": bool(device.verified), "changed": bool(changed), "device": self._device_info(device)}
 
     def _require_ready(self) -> AsyncClient:
         if not self.ready.is_set() or self.client is None:
@@ -571,12 +746,7 @@ class MatrixReceiver:
         if not isinstance(transaction_id, str) or not 1 <= len(transaction_id) <= 128:
             raise ValueError("Ungültige Nachrichten-Transaktions-ID.")
         async with self._send_lock:
-            try:
-                response = self._require_ok(await self.client.room_send(
-                    room_id, "m.room.message", {"msgtype": "m.text", "body": text}, tx_id=transaction_id,
-                ), "Nachrichtenversand")
-            except (EncryptionError, LocalProtocolError) as exc:
-                raise MatrixSetupError("Die Geräte dieses verschlüsselten Chats müssen zuerst verifiziert werden.") from exc
+            response = await self._send_room_message(room_id, text, transaction_id, room)
         timestamp = int(time.time() * 1000)
         self.chat_store.save_message(room_id, response.event_id, self.settings.user_id,
                                      self._displayname(room, self.settings.user_id), text, timestamp, bool(room.encrypted))
@@ -584,19 +754,111 @@ class MatrixReceiver:
             await self.on_messenger_send(MatrixMessage(response.event_id, self.settings.user_id, text, timestamp))
         return {"event_id": response.event_id}
 
+    async def _send_room_message(self, room_id: str, text: str, transaction_id: str, room: Any = None) -> Any:
+        try:
+            return self._action_ok(await self.client.room_send(
+                room_id, "m.room.message", {"msgtype": "m.text", "body": text}, tx_id=transaction_id,
+            ), "Nachrichtenversand")
+        except OlmUnverifiedDeviceError as error:
+            devices = self._unverified_devices(room)
+            device = getattr(error, "device", None)
+            if device is not None and not any(item["user_id"] == device.user_id and item["device_id"] == device.id for item in devices):
+                devices.append(self._device_info(device))
+            raise MatrixActionError(
+                "unverified_devices",
+                "Vor dem Senden müssen die Geräte dieses Chats bestätigt werden. Geräte & Schlüssel öffnen und die aufgeführten Geräte verifizieren.",
+                {"room_id": room_id, "devices": devices},
+            ) from None
+        except (EncryptionError, LocalProtocolError):
+            raise MatrixActionError(
+                "encryption_not_ready",
+                "Die Verschlüsselung ist noch nicht bereit. Gerätefreigabe prüfen und die Raumschlüssel erneut anfordern.",
+                {"room_id": room_id},
+            ) from None
+
+    def _action_ok(self, response: Any, action: str) -> Any:
+        if isinstance(response, ErrorResponse) and response.status_code == "M_FORBIDDEN":
+            raise MatrixActionError("permission_denied", "Deinem Matrix-Konto fehlt die Berechtigung für diese Aktion.", status=403)
+        return self._require_ok(response, action)
+
+    @staticmethod
+    def _validate_user_id(user_id: str) -> None:
+        if not isinstance(user_id, str):
+            raise ValueError("Die vollständige Matrix-Benutzer-ID wird benötigt.")
+        local, separator, server = user_id.partition(":")
+        if not local.startswith("@") or len(local) < 2 or not separator or not server or len(user_id) > 255 or any(char.isspace() for char in user_id):
+            raise ValueError("Die vollständige Matrix-Benutzer-ID wird benötigt.")
+
+    async def create_room(self, name: str, invite: list[str], encrypted: bool = True) -> dict:
+        client = self._require_ready()
+        if not isinstance(name, str) or not name.strip() or len(name) > 255:
+            raise ValueError("Ein Raumname mit höchstens 255 Zeichen wird benötigt.")
+        if not isinstance(invite, list) or len(invite) > 50 or type(encrypted) is not bool:
+            raise ValueError("Ungültige Einstellungen für den neuen Raum.")
+        for user_id in invite:
+            self._validate_user_id(user_id)
+        initial_state = [{"type": "m.room.encryption", "state_key": "", "content": {"algorithm": "m.megolm.v1.aes-sha2"}}] if encrypted else []
+        response = self._action_ok(await client.room_create(
+            name=name.strip(), preset=RoomPreset.private_chat,
+            invite=list(dict.fromkeys(invite)), initial_state=initial_state,
+        ), "Raum erstellen")
+        self.chat_store.upsert_room(response.room_id, name=name.strip(), is_direct=False, encrypted=encrypted, membership="join")
+        return {"room_id": response.room_id}
+
+    async def invite_user(self, room_id: str, user_id: str) -> dict:
+        self._require_joined(room_id)
+        self._validate_user_id(user_id)
+        self._action_ok(await self.client.room_invite(room_id, user_id), "Person einladen")
+        return {"room_id": room_id, "user_id": user_id, "invited": True}
+
+    async def rename_room(self, room_id: str, name: str) -> dict:
+        room = self._require_joined(room_id)
+        if not isinstance(name, str) or not name.strip() or len(name) > 255:
+            raise ValueError("Ein Raumname mit höchstens 255 Zeichen wird benötigt.")
+        self._action_ok(await self.client.room_put_state(room_id, "m.room.name", {"name": name.strip()}), "Raum umbenennen")
+        room.name = name.strip()
+        self.chat_store.upsert_room(room_id, name=name.strip())
+        return {"room_id": room_id, "name": name.strip()}
+
+    async def leave_room(self, room_id: str) -> dict:
+        client = self._require_ready()
+        room = self.chat_store.room(room_id)
+        if room is None or room["membership"] not in ("join", "invite"):
+            raise MatrixSetupError("Dieser Matrix-Raum ist nicht verfügbar.")
+        self._action_ok(await client.room_leave(room_id), "Raum verlassen")
+        self.chat_store.upsert_room(room_id, membership="leave", unread_count=0)
+        getattr(client, "rooms", {}).pop(room_id, None)
+        getattr(client, "invited_rooms", {}).pop(room_id, None)
+        self._encrypted = {event_id: source for event_id, source in self._encrypted.items() if source.get("room_id") != room_id}
+        _write_private(self.data_dir / "pending_encrypted.json", self._encrypted)
+        for user_id in list(self._direct_rooms):
+            self._direct_rooms[user_id] = [target for target in self._direct_rooms[user_id] if target != room_id]
+            if not self._direct_rooms[user_id]:
+                del self._direct_rooms[user_id]
+        self.chat_store.set_metadata("direct_rooms", self._direct_rooms)
+        if room_id == self.room_id:
+            self.room_id = ""
+            self.bridge_error = "Der Raum für die Meshtastic-Weiterleitung wurde verlassen. Bitte einen neuen Bridge-Raum auswählen."
+        return {"room_id": room_id, "membership": "leave"}
+
     async def join_room(self, room_id: str) -> dict:
         client = self._require_ready()
         known = self.chat_store.room(room_id)
-        if known is None or known["membership"] != "invite":
-            raise MatrixSetupError("Für diesen Raum liegt keine Einladung vor.")
-        response = self._require_ok(await client.join(room_id), "Raumbeitritt")
+        if not isinstance(room_id, str) or not room_id.startswith(("!", "#")) or len(room_id) < 2 or len(room_id) > 255 or any(char.isspace() for char in room_id):
+            raise ValueError("Eine vollständige Matrix-Raum-ID oder ein Raumalias wird benötigt.")
+        if room_id.startswith("#"):
+            local, separator, server = room_id.partition(":")
+            if len(local) < 2 or not separator or not server:
+                raise ValueError("Ein vollständiger Raumalias mit Servernamen wird benötigt.")
+        if known and known["membership"] == "join":
+            return {"room_id": room_id}
+        response = self._action_ok(await client.join(room_id), "Raumbeitritt")
         self.chat_store.upsert_room(response.room_id, membership="join")
         return {"room_id": response.room_id}
 
     async def create_direct(self, user_id: str) -> dict:
         client = self._require_ready()
-        if not isinstance(user_id, str) or not user_id.startswith("@") or ":" not in user_id or any(char.isspace() for char in user_id):
-            raise ValueError("Die vollständige Matrix-Benutzer-ID wird benötigt.")
+        self._validate_user_id(user_id)
         for room_id in self._direct_rooms.get(user_id, []):
             stored_room = self.chat_store.room(room_id)
             if room_id in client.rooms and stored_room is not None and stored_room["membership"] == "join":
@@ -655,15 +917,7 @@ class MatrixReceiver:
         async with self._send_lock:
             if self.client is None or not self.ready.is_set():
                 raise MatrixConnectionError("Matrix ist noch nicht verbunden")
-            self._require_ok(
-                await self.client.room_send(
-                    self.room_id,
-                    "m.room.message",
-                    {"msgtype": "m.text", "body": text},
-                    tx_id=transaction_id,
-                ),
-                "Nachrichtenversand",
-            )
+            await self._send_room_message(self.room_id, text, transaction_id, getattr(self.client, "rooms", {}).get(self.room_id))
 
     async def close(self) -> None:
         self.ready.clear()

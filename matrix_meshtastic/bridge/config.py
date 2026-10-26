@@ -56,12 +56,19 @@ class Settings:
     def load(cls, path: Path) -> "Settings":
         try:
             raw = json.loads(path.read_text())
+        except (OSError, ValueError) as exc:
+            raise ValueError("Die App-Konfiguration konnte nicht gelesen werden.") from exc
+        return cls.from_dict(raw)
+
+    @classmethod
+    def from_dict(cls, raw: dict) -> "Settings":
+        try:
             settings = cls(
                 MatrixSettings(**raw.get("matrix", {})),
                 RadioSettings(**raw.get("meshtastic", {})),
                 ForwardingSettings(**raw.get("forwarding", {})),
             )
-        except (OSError, ValueError, TypeError, AttributeError) as exc:
+        except (ValueError, TypeError, AttributeError) as exc:
             raise ValueError("Die Add-on-Konfiguration konnte nicht gelesen werden.") from exc
         settings.validate()
         return settings

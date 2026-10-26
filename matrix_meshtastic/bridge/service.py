@@ -25,7 +25,7 @@ async def pause(stop: asyncio.Event, seconds: float) -> None:
 
 
 class Bridge:
-    def __init__(self, settings: Settings, data_dir: Path):
+    def __init__(self, settings: Settings, data_dir: Path, manage_ingress: bool = True):
         self.settings = settings
         binding = json.dumps({
             "matrix": [settings.matrix.homeserver, settings.matrix.user_id, settings.matrix.room_id],
@@ -54,7 +54,7 @@ class Bridge:
                 self._block_radio(f"Meshtastic konnte nicht vorbereitet werden ({type(exc).__name__}).")
             else:
                 self._set_radio_status("connecting", "Die Meshtastic-Verbindung wird hergestellt.")
-        self.ingress = IngressServer(self.matrix, self.radio_status)
+        self.ingress = IngressServer(self.matrix, self.radio_status) if manage_ingress else None
 
     def radio_status(self) -> dict:
         self._check_bridge_destination()
@@ -269,7 +269,8 @@ class Bridge:
     async def run(self) -> None:
         tasks = []
         try:
-            await self.ingress.start()
+            if self.ingress is not None:
+                await self.ingress.start()
             tasks.append(asyncio.create_task(self._matrix_connection()))
             if self.radio is not None:
                 tasks.append(asyncio.create_task(self._radio_workers()))
@@ -281,5 +282,8 @@ class Bridge:
             for task in tasks:
                 task.cancel()
             await asyncio.gather(*tasks, return_exceptions=True)
-            await asyncio.gather(self.matrix.close(), self._close_radio(), self.ingress.close(), return_exceptions=True)
+            cleanup = [self.matrix.close(), self._close_radio()]
+            if self.ingress is not None:
+                cleanup.append(self.ingress.close())
+            await asyncio.gather(*cleanup, return_exceptions=True)
             self.state.close()
